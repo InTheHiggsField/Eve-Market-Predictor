@@ -14,12 +14,13 @@
 <p>Items were chosen by average ISK traded per day over 90 days, keeping items that also have enough individual trades per day for prices to be meaningful. The seven specialty minerals are the exception: they're included for completeness but trade only a handful of times a day, so their forecasts are very noisy.</p>
 
 <h2>Trade hubs</h2>
-<p>The same items are tracked at each major high-sec trade hub, defined in <code>data_sets/markets.py</code>. Use the <b>Market</b> picker at the top of the Market data and Predictions pages to switch between them.</p>
+<p>The same items are tracked at the five major high-sec trade hubs and at Zarzakh, CCP's neutral null-sec hub, all defined in <code>data_sets/markets.py</code>. Use the <b>Market</b> picker at the top of the Market data and Predictions pages to switch between them.</p>
 <table>
   <thead><tr><th>Hub</th><th>Region (price history)</th><th>Station (bid/ask snapshots)</th></tr></thead>
   <tbody>{% for name, m in markets.items() %}<tr><td><b>{{ name }}</b></td><td>{{ m.region }}</td><td>{{ m.station }}</td></tr>{% endfor %}</tbody>
 </table>
 <p>ESI only keeps price history per <i>region</i>, so a hub's charts and forecasts reflect every trade in its region; most of that volume happens at the hub station itself. Order-book snapshots are filtered to the hub station. PLEX trades on one global market, so its price history is the same at every hub, but its bid/ask is still taken at each hub's station. Each hub gets its own model, trained only on that hub's history.</p>
+<p>Other low-sec and null-sec trading mostly happens in player citadels with private markets, which ESI only shows to characters allowed to dock there. Zarzakh is alone in its region, so its history really is the hub's own, but it is a thin market (24 of the tracked items trade there, since November 2023).</p>
 
 <h2>Where the data comes from</h2>
 <p>Everything comes from EVE's public <a href="https://developers.eveonline.com/api-explorer" target="_blank" rel="noopener">ESI API</a>; no login is needed.</p>
@@ -91,7 +92,7 @@ python -m eve_market backfill                   # one-off: history back to 2003 
 python -m eve_market backtest --list commodities --market Amarr
 python -m eve_market forecast --list core --model ridge --out data/forecast.csv
 python -m eve_market dashboard                  # this site, at http://127.0.0.1:5000</code></pre>
-<p>Options: <code>--market Jita|Amarr|Dodixie|Hek|Rens</code> (collect and backfill take several, default all), <code>--list core|commodities|all</code>, <code>--horizon N</code>, <code>--model ridge|gbm</code>, and for the dashboard <code>--port</code>. To keep data current, schedule <code>python -m eve_market collect</code> once a day (ESI history updates shortly after downtime, 11:00 UTC). Refresh this page after collecting; predictions retrain automatically when new data arrives.</p>
+<p>Options: <code>--market Jita|Amarr|Dodixie|Hek|Rens|Zarzakh</code> (collect and backfill take several, default all), <code>--list core|commodities|all</code>, <code>--horizon N</code>, <code>--model ridge|gbm</code>, and for the dashboard <code>--port</code>. To keep data current, schedule <code>python -m eve_market collect</code> once a day (ESI history updates shortly after downtime, 11:00 UTC). Refresh this page after collecting; predictions retrain automatically when new data arrives.</p>
 <p>To track a different item, add its name and <code>type_id</code> to one of the dictionaries in <code>data_sets/tracked_items.py</code> (and a display group in <code>ITEM_GROUPS</code>), then collect again. Type IDs can be looked up in <code>data_sets/invTypes_clean.csv</code>.</p>
 
 <h2>Code layout</h2>

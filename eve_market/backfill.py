@@ -24,13 +24,24 @@ log = logging.getLogger(__name__)
 ROOT_INDEX = "https://data.everef.net/market-history/index.json"
 
 LOG_SCHEMA = """
-CREATE TABLE IF NOT EXISTS backfill_log (
-    file_date TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS backfill_regions (
+    file_date TEXT NOT NULL,
+    region_id INTEGER NOT NULL,
     etag TEXT,
     item_set TEXT,
-    rows INTEGER
+    rows INTEGER,
+    PRIMARY KEY (file_date, region_id)
 );
 """
+
+
+def _region_sets(keep: set[tuple[int, int]]) -> dict[int, str]:
+    """A short fingerprint of which items are kept per region, so adding a hub or item only
+    re-fetches days for the regions that changed."""
+    by_region: dict[int, list[int]] = {}
+    for r, t in keep:
+        by_region.setdefault(r, []).append(t)
+    return {r: hashlib.sha1(repr(sorted(ts)).encode()).hexdigest()[:12] for r, ts in by_region.items()}
 
 
 def _session() -> requests.Session:
@@ -84,21 +95,25 @@ def backfill(items: dict[str, int], region_overrides: dict[str, int], regions: l
              end: str | None = None, db_path=storage.DEFAULT_DB, workers: int = 4, force: bool = False) -> None:
     end = end or date.today().isoformat()
     keep = _wanted_key(items, region_overrides, regions)
-    item_set = hashlib.sha1(repr(sorted(keep)).encode()).hexdigest()[:12]
+    region_sets = _region_sets(keep)
     conn = storage.connect(db_path)
     conn.executescript(LOG_SCHEMA)
     storage.save_type_names(conn, items)
-    done = {d: (e, s) for d, e, s in conn.execute("SELECT file_date, etag, item_set FROM backfill_log")}
+    done = {(d, r): (e, s) for d, r, e, s in conn.execute(
+        "SELECT file_date, region_id, etag, item_set FROM backfill_regions")}
 
     session = _session()
     files = list_files(session, start, end)
-    todo = [f for f in files if force or done.get(f["date"]) != (f["etag"], item_set)]
+    for f in files:  # regions this day still needs
+        f["regions"] = [r for r, h in region_sets.items() if force or done.get((f["date"], r)) != (f["etag"], h)]
+    todo = [f for f in files if f["regions"]]
     mb = sum(f["size"] for f in todo) / 1e6
     log.info("%d archive days in range, %d to fetch (~%.0f MB download)", len(files), len(todo), mb)
 
     total_rows = 0
     with ThreadPoolExecutor(workers) as pool:
-        futures = {pool.submit(fetch_and_trim, session, f["url"], keep): f for f in todo}
+        futures = {pool.submit(fetch_and_trim, session, f["url"], {k for k in keep if k[0] in f["regions"]}): f
+                   for f in todo}
         for i, fut in enumerate(as_completed(futures), 1):
             f = futures[fut]
             try:
@@ -107,7 +122,9 @@ def backfill(items: dict[str, int], region_overrides: dict[str, int], regions: l
                 log.warning("%s failed: %s (re-run backfill to retry)", f["date"], exc)
                 continue
             conn.executemany("INSERT OR REPLACE INTO history VALUES (?,?,?,?,?,?,?,?)", rows)
-            conn.execute("INSERT OR REPLACE INTO backfill_log VALUES (?,?,?,?)", (f["date"], f["etag"], item_set, len(rows)))
+            conn.executemany("INSERT OR REPLACE INTO backfill_regions VALUES (?,?,?,?,?)",
+                             [(f["date"], r, f["etag"], region_sets[r], sum(1 for x in rows if x[0] == r))
+                              for r in f["regions"]])
             conn.commit()
             total_rows += len(rows)
             if i % 100 == 0 or i == len(todo):
