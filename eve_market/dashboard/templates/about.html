@@ -45,6 +45,29 @@
   <li><b>Station forecast</b>: until there are {{ min_station_days }} days of hourly snapshots, the regional forecast's percentage move is applied to the current station mid. After that, a <b>station model</b> takes over. It uses the regional features above plus the station premium, the station's own 1/3/7-day returns and its spread, and predicts the station mid directly. The Predictions page says which one is in use.</li>
 </ul>
 
+<h2>Market health</h2>
+<p>A healthy market lets you trade a meaningful size quickly, close to fair value, without moving the price, and its price reflects many independent traders rather than one or two. Economists split that into four things: <b>tightness</b> (the cost of a round trip), <b>depth</b> (how much is on offer near the best price), <b>resilience</b> (how fast price recovers after a big trade) and <b>breadth</b> (how many people are trading). EVE is a good place to measure them: every order is public, fees are known and nobody can sell short.</p>
+<p>The Health page measures each item at each hub:</p>
+<table>
+  <thead><tr><th>Metric</th><th>How it is computed</th><th>Healthy looks like</th></tr></thead>
+  <tbody>
+    <tr><td><b>ISK/day</b> (turnover)</td><td>Median of average price &times; volume, last 30 days</td><td>High</td></tr>
+    <tr><td><b>Trades/day</b>, <b>no-trade days</b></td><td>Median trade count, and the share of the last 30 days with no trade</td><td>Many trades, no empty days</td></tr>
+    <tr><td><b>Impact /B</b> (Amihud illiquidity)</td><td>Median of |daily return| &divide; ISK traded that day, per billion ISK</td><td>Low: size does not move the price</td></tr>
+    <tr><td><b>Implied spread</b> (Roll)</td><td><code>2 &times; sqrt(&minus;cov(r<sub>t</sub>, r<sub>t&minus;1</sub>))</code> over 90 days. When trades alternate between the bid and the ask, the daily average bounces, and the size of the bounce reveals the spread</td><td>Low</td></tr>
+    <tr><td><b>Spread</b>, <b>Eff. spread</b></td><td>(ask &minus; bid) &divide; mid at the hub station: for the single best orders, and for the best 5% of volume on each side</td><td>Near or under the ~5% cost of fees and tax</td></tr>
+    <tr><td><b>Depth</b></td><td>ISK resting within 5% of the best price, on the thinner side of the book</td><td>High</td></tr>
+    <tr><td><b>Imbalance</b></td><td>(bid depth &minus; ask depth) &divide; total, from &minus;1 to +1</td><td>Near zero; extremes can lead price</td></tr>
+    <tr><td><b>Volatility</b></td><td>Standard deviation of daily returns over 90 days, annualized</td><td>Moderate and steady</td></tr>
+    <tr><td><b>Bounce</b></td><td>Lag-1 autocorrelation of daily returns. Strongly negative means the daily average is flipping between bid and ask fills, which is noise, not a real reversal</td><td>Near zero</td></tr>
+    <tr><td><b>Gap vs Jita</b></td><td>Typical price difference from Jita over 30 days. Hubs joined by haulers should differ by little more than freight</td><td>Small</td></tr>
+    <tr><td><b>Top order</b>, <b>Churn</b></td><td>From individual orders near the top of the book: the share of the ISK held by the largest single order, and the share of orders placed or repriced in the last hour (undercutting wars)</td><td>Low</td></tr>
+  </tbody>
+</table>
+<p>The <b>score</b> (0 to 100) is the average percentile of turnover, impact, implied spread, trade activity, quoted spread and depth, ranked across every item at every hub. Items trading under {{ "%g"|format(min_isk / 1e9) }}B ISK a day are labelled <b>Illiquid</b> whatever they score, 60 and up is <b>Healthy</b>, the rest <b>Thin</b>. Volatility, imbalance, bait orders, outlier prints and the rest appear as <b>warnings</b> rather than in the score, because a volatile market is not unhealthy by itself.</p>
+<p>Health feeds the models in three ways. Items under the ISK floor are left out of training, backtests and forecasts (override with <code>--min-isk</code>). Outlier prints, such as fat-finger trades, are clipped: each day's price is limited to a band around the median of the previous 7 days, using past days only. And the implied spread, price impact and share of no-trade days are model features.</p>
+<p>ESI does not reveal who owns a public order, so concentration is measured per order, not per trader, and the tool cannot prove that two orders belong to the same person. Individual orders within 20% of the best price are kept for 90 days.</p>
+
 <h2>What the model predicts</h2>
 <p>For each item and day <i>t</i>, the target is the <b>log return of the daily average price over the next <i>h</i> days</b>: <code>log(price[t+h] / price[t])</code>, with <i>h</i> = 7 by default. A log return of 0.05 is roughly a 5% rise. Days with no trades carry the last price forward with zero volume.</p>
 <p>Each day is described by these features, all computed only from data up to that day:</p>
@@ -57,6 +80,9 @@
     <tr><td><code>range_pct</code></td><td>Today's high minus low, as a fraction of the average price</td></tr>
     <tr><td><code>volume_z</code></td><td>Today's volume compared with its 30-day norm (z-score of log volume)</td></tr>
     <tr><td><code>dow</code></td><td>Day of the week (weekend activity differs)</td></tr>
+    <tr><td><code>roll_30</code></td><td>Roll implied spread over 30 days (how much of the recent movement is bid-ask bounce)</td></tr>
+    <tr><td><code>amihud_30</code></td><td>Price impact over 30 days: total |return| per billion ISK traded (log scale)</td></tr>
+    <tr><td><code>zero_30</code></td><td>Share of the last 30 days with no trade</td></tr>
   </tbody>
 </table>
 <p>One model is trained across all items in a list at once (a "pooled" model). That gives it far more examples than any single item has, at the cost of assuming items behave similarly once their features are scaled.</p>
@@ -88,6 +114,7 @@
   <li>On the core list (PLEX, injectors, ships) the models currently do <b>not</b> beat "no change". These markets are deep and efficient, and the features above don't capture what moves them (patch notes, PLEX sales, events).</li>
   <li>On liquid commodities, Ridge beats the baseline modestly (about 4% lower error, ~60% direction accuracy).</li>
   <li>The daily average mixes buy-order and sell-order fills, so part of any day-to-day "move" is just which side traded more. That flatters direction accuracy.</li>
+  <li>Backtests cover only items above the health floor, and their targets use prices with outlier prints clipped, so results are not comparable with runs from before the floor was added.</li>
   <li>The backtest ignores broker fees, sales tax, and how much you could actually trade without moving the price.</li>
   <li>Markets from a decade ago behaved differently (fewer players, different game mechanics), so old history adds examples but not always relevant ones.</li>
 </ul>
@@ -103,6 +130,7 @@ python -m eve_market collect                    # both lists, ~30 seconds
 python -m eve_market backfill                   # one-off: history back to 2003 (several GB streamed; re-run to resume)
 python -m eve_market backtest --list commodities --market Amarr
 python -m eve_market forecast --list core --model ridge --out data/forecast.csv
+python -m eve_market health --market Amarr      # health score and warnings per item
 python -m eve_market dashboard                  # this site, at http://127.0.0.1:5000
 python -m eve_market backtest --station --market Jita   # station model, once enough snapshots exist</code></pre>
 <p>On Windows, run these through the included <code>eve</code> wrapper (<code>.\eve collect</code>) or after activating the venv. The hourly task runs <code>scheduled_collect.pyw</code>, which takes snapshots every hour and refreshes daily history every 12 hours; its log is <code>data/collect.log</code>. Remove it with <code>Unregister-ScheduledTask -TaskName "EVE Market Collect"</code>.</p>
@@ -116,6 +144,7 @@ python -m eve_market backtest --station --market Jita   # station model, once en
     <tr><td><code>eve_market/collect.py</code></td><td>Collection job</td></tr>
     <tr><td><code>eve_market/storage.py</code></td><td>SQLite schema and queries</td></tr>
     <tr><td><code>eve_market/forecast.py</code></td><td>Features, models, backtest, forecasts</td></tr>
+    <tr><td><code>eve_market/health.py</code></td><td>Market health metrics, score and warning flags</td></tr>
     <tr><td><code>eve_market/dashboard/</code></td><td>This website (Flask + Chart.js)</td></tr>
   </tbody>
 </table>

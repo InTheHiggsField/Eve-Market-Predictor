@@ -15,8 +15,9 @@ from flask import Flask, abort, jsonify, render_template, request
 
 from .. import storage
 from ..config import DEFAULT_MARKET, ITEM_GROUPS, ITEM_LISTS, MARKETS, REGION_OVERRIDES, load_history
-from ..forecast import (FEATURES, MIN_STATION_DAYS, backtest, build_features, build_station_features, make_models,
-                        predict_station, station_days)
+from ..forecast import (DEFAULT_MIN_ISK, FEATURES, MIN_STATION_DAYS, apply_health_floor, backtest, build_features,
+                        build_station_features, make_models, predict_station, station_days)
+from ..health import health_table
 
 HERE = Path(__file__).resolve().parent
 LIST_OF = {name: lst for lst in ("core", "commodities") for name in ITEM_LISTS[lst]}
@@ -58,11 +59,16 @@ def create_app(db_path: str | Path = storage.DEFAULT_DB) -> Flask:
     def predictions_page():
         return render_template("predictions.html", page="predictions", markets=MARKETS)
 
+    @app.get("/health")
+    def health_page():
+        return render_template("health.html", page="health", markets=MARKETS, min_isk=DEFAULT_MIN_ISK)
+
     @app.get("/about")
     def about_page():
         return render_template("about.html", page="about", region_overrides=REGION_OVERRIDES, markets=MARKETS,
                                features=FEATURES, n_core=len(ITEM_LISTS["core"]),
-                               n_commod=len(ITEM_LISTS["commodities"]), min_station_days=MIN_STATION_DAYS)
+                               n_commod=len(ITEM_LISTS["commodities"]), min_station_days=MIN_STATION_DAYS,
+                               min_isk=DEFAULT_MIN_ISK)
 
     # ---------- API ----------
     @app.get("/api/items")
@@ -133,6 +139,18 @@ def create_app(db_path: str | Path = storage.DEFAULT_DB) -> Flask:
             "ask": st["ask_top5"].fillna(st["best_ask"]).tolist(),
         })
 
+    @app.get("/api/health")
+    def api_health():
+        market = market_arg()
+        list_name = request.args.get("list", "all")
+        if list_name not in ITEM_LISTS:
+            abort(400, f"unknown list {list_name}")
+        with conn() as c:
+            df = health_table(c, market, list_name)
+        df = df.astype(object).where(df.notna(), None) if not df.empty else df
+        return jsonify({"market": market, "min_isk": DEFAULT_MIN_ISK,
+                        "items": [{**r, "list": LIST_OF.get(r["name"], "")} for r in df.to_dict("records")]})
+
     @app.get("/api/predictions")
     def api_predictions():
         market = market_arg()
@@ -159,8 +177,16 @@ def _predictions(db_path: str, market: str, list_name: str, model_name: str, hor
     with closing(storage.connect(db_path)) as c:
         hist = load_history(c, list_name, market)
         station = storage.read_station_prices(c, MARKETS[market]["station_id"], list(ITEM_LISTS[list_name].values()))
-    feats = build_features(hist, horizon)
+    feats, excluded = apply_health_floor(build_features(hist, horizon))
+    empty = {"market": market, "list": list_name, "model": model_name, "horizon": horizon, "summary": [], "folds": [],
+             "items": [], "excluded": excluded, "min_isk": DEFAULT_MIN_ISK,
+             "station": {"name": MARKETS[market]["station"], "ready": False, "days": 0, "needed": MIN_STATION_DAYS,
+                         "summary": None}}
+    if feats.empty:
+        return empty
     metrics, oos = backtest(feats, horizon, return_predictions=True)
+    if metrics.empty:
+        return empty
     summary = (metrics.groupby("model")[["mae", "direction_acc"]].mean()
                .reindex(["no_change", "momentum", "ridge", "gbm"]).reset_index())
 
@@ -221,7 +247,7 @@ def _predictions(db_path: str, market: str, list_name: str, model_name: str, hor
         "market": market, "list": list_name, "model": model_name, "horizon": horizon,
         "summary": summary.replace({np.nan: None}).to_dict("records"),
         "folds": [{**rec, "fold_start": str(rec["fold_start"])} for rec in metrics.to_dict("records")],
-        "items": items,
+        "items": items, "excluded": excluded, "min_isk": DEFAULT_MIN_ISK,
         "station": {"name": MARKETS[market]["station"], "ready": st_result is not None, "days": days,
                     "needed": MIN_STATION_DAYS, "summary": st_summary},
     }

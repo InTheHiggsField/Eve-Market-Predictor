@@ -6,6 +6,7 @@
     python -m eve_market backfill             # older history (back to 2003) from the EVE Ref archive
     python -m eve_market login                # log in a character (citadel markets)
     python -m eve_market hubs --security low  # where the tracked items trade, incl. citadels
+    python -m eve_market health               # market health score and warning flags per item
     python -m eve_market dashboard            # local website at http://127.0.0.1:5000
 """
 from __future__ import annotations
@@ -19,7 +20,7 @@ import pandas as pd
 from . import storage
 from .collect import collect
 from .config import DEFAULT_MARKET, ITEM_LISTS, MARKETS, REGION_OVERRIDES, load_history
-from .forecast import backtest, build_features, predict_latest
+from .forecast import DEFAULT_MIN_ISK, apply_health_floor, backtest, build_features, predict_latest
 
 # this is our main function which stores all the return data in our database and then our websites use this data.
 def main(argv: list[str] | None = None) -> None:
@@ -42,6 +43,8 @@ def main(argv: list[str] | None = None) -> None:
         s.add_argument("--list", choices=ITEM_LISTS, default="core",
                        help="core = PLEX/injectors/ships, commodities = minerals/ore/components")
         s.add_argument("--market", choices=MARKETS, default=DEFAULT_MARKET, help="trade hub (default: Jita)")
+        s.add_argument("--min-isk", type=float, default=DEFAULT_MIN_ISK,
+                       help="health floor: leave out items trading less ISK per day than this (0 = keep all)")
         s.add_argument("--station", action="store_true",
                        help="model the hub station's own price (needs ~45 days of hourly snapshots)")
     sub.choices["forecast"].add_argument("--model", choices=["gbm", "ridge"], default="gbm")
@@ -60,6 +63,11 @@ def main(argv: list[str] | None = None) -> None:
     h = sub.add_parser("hubs", help="rank where the tracked items trade, including citadels")
     h.add_argument("--security", choices=["high", "low", "null"], help="only show this security band")
     h.add_argument("--top", type=int, default=80)
+
+    hl = sub.add_parser("health", help="market health score and warning flags per item")
+    hl.add_argument("--list", choices=ITEM_LISTS, default="all")
+    hl.add_argument("--market", choices=MARKETS, default=DEFAULT_MARKET)
+    hl.add_argument("--min-isk", type=float, default=DEFAULT_MIN_ISK, help="ISK/day below which an item is illiquid")
 
     d = sub.add_parser("dashboard", help="serve the local dashboard")
     d.add_argument("--port", type=int, default=5000)
@@ -99,6 +107,11 @@ def main(argv: list[str] | None = None) -> None:
         backfill(ITEM_LISTS[args.list], REGION_OVERRIDES, [MARKETS[m]["region_id"] for m in args.market], args.start, args.end, args.db, args.workers, args.force)
         return
 
+    if args.cmd == "health":
+        from .health import health_table, print_health
+        print_health(health_table(storage.connect(args.db), args.market, args.list, args.min_isk))
+        return
+
     if args.cmd == "dashboard":
         from .dashboard import run
         print(f"Dashboard at http://{args.host}:{args.port}")
@@ -106,7 +119,13 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     conn = storage.connect(args.db)
-    feats = build_features(load_history(conn, args.list, args.market), args.horizon)
+    feats, excluded = apply_health_floor(build_features(load_history(conn, args.list, args.market), args.horizon),
+                                         args.min_isk)
+    if excluded:
+        print(f"Left out as illiquid (under {args.min_isk / 1e9:g}B ISK/day): {', '.join(excluded)}\n")
+    if feats.empty:
+        print("No item at this hub is above the health floor. Lower it with --min-isk.")
+        return
     if args.station:
         from .forecast import MIN_STATION_DAYS, build_station_features, predict_station, station_days
         st = storage.read_station_prices(conn, MARKETS[args.market]["station_id"],

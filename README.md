@@ -13,6 +13,7 @@ pip install -r requirements.txt
 python -m eve_market collect     # ~13 months of daily history for every tracked item + a live order-book snapshot
 python -m eve_market backfill    # one-off: daily history back to 2003 from the EVE Ref archive (~resumable)
 python -m eve_market backtest    # walk-forward evaluation vs. naive baselines
+python -m eve_market health      # market health score and warning flags per item
 python -m eve_market forecast --out data/forecast.csv   # predicted 7-day % change per item
 python -m eve_market dashboard   # local website at http://127.0.0.1:5000
 ```
@@ -58,5 +59,6 @@ Player-owned citadels (e.g. low-sec trade Keepstars) need a logged-in character:
 - `eve_market/storage.py` - SQLite schema and helpers
 - `eve_market/collect.py` - collection job
 - `eve_market/forecast.py` - features, backtest, predictions
+- `eve_market/health.py` - market health metrics (liquidity, spread, depth, impact), score and flags
 - `eve_market/dashboard/` - Flask + Chart.js dashboard
 - `tests/` - `python -m pytest`

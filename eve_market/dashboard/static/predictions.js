@@ -120,7 +120,24 @@ function renderStationStatus() {
   }
 }
 
-function renderAll() { renderSummary(); renderStationStatus(); renderRank(); renderCards(); }
+function renderExcluded() {
+  const el = document.getElementById("excluded"), ex = data.excluded || [];
+  el.hidden = !ex.length;
+  el.innerHTML = `<b>Left out as illiquid</b> (under ${fmtIsk(data.min_isk)} ISK traded a day in ${esc(data.market)}): ${ex.map(esc).join(", ")}. ` +
+    `A forecast there would be smaller than the cost of trading. See the <a href="/health">Health page</a>.`;
+}
+
+function renderAll() {
+  renderExcluded();
+  if (!data.items.length) {
+    document.querySelector("#summary").innerHTML = `<tbody><tr><td class="loading">No item on this list is liquid enough to model in ${esc(data.market)}.</td></tr></tbody>`;
+    document.getElementById("verdict").hidden = true; document.getElementById("station-status").hidden = true;
+    rankChart?.destroy(); charts.forEach(c => c.destroy()); charts = [];
+    document.getElementById("cards").innerHTML = "";
+    return;
+  }
+  renderSummary(); renderStationStatus(); renderRank(); renderCards();
+}
 
 async function load() {
   const my = ++reqId;

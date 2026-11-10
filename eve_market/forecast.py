@@ -14,6 +14,21 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 LAGS = (1, 3, 7, 14, 30)
+DEFAULT_MIN_ISK = 1e9  # health floor: items trading less ISK than this per day are left out of the models
+
+
+def clean_log_price(logp: pd.Series, window: int = 7, k: float = 6.0, min_band: float = 0.3) -> pd.Series:
+    """Clip outlier prints (fat-finger or manipulated trades) out of a daily log-price series.
+
+    Each day is limited to a band around the median of the previous `window` days. The band is
+    `k` robust standard deviations wide and never narrower than `min_band` (30%). Only past days
+    are used, so features built on the result have no lookahead. A real jump is delayed by a few
+    days, until the trailing median catches up, rather than removed."""
+    med = logp.shift(1).rolling(window, min_periods=3).median()
+    dev = (logp - med).abs()
+    scale = dev.shift(1).rolling(30, min_periods=5).median() * 1.4826
+    band = np.maximum(k * scale.fillna(0), min_band)
+    return logp.clip(lower=med - band, upper=med + band).where(med.notna(), logp)
 """This is where all of the forecasting models rest"""
 
 def _daily(g: pd.DataFrame) -> pd.DataFrame:
@@ -35,16 +50,23 @@ def build_features(history: pd.DataFrame, horizon: int = 7) -> pd.DataFrame: #Ho
         if len(g) < 60:
             continue
         g = _daily(g)
-        logp = np.log(g["average"])
+        logp = clean_log_price(np.log(g["average"]))
         r1 = logp.diff()
         f = g[["date", "type_id", "name", "average", "volume"]].copy()
         for lag in LAGS:
             f[f"ret_{lag}"] = logp - logp.shift(lag)
         f["vol_7"] = r1.rolling(7).std()
         f["vol_30"] = r1.rolling(30).std()
-        f["ma_ratio_7"] = logp - np.log(g["average"].rolling(7).mean())
-        f["ma_ratio_30"] = logp - np.log(g["average"].rolling(30).mean())
-        f["range_pct"] = (g["highest"] - g["lowest"]) / g["average"]
+        f["ma_ratio_7"] = logp - logp.rolling(7).mean()
+        f["ma_ratio_30"] = logp - logp.rolling(30).mean()
+        f["range_pct"] = ((g["highest"] - g["lowest"]) / g["average"]).clip(upper=1.0)
+        # Market-health features (see health.py), all trailing 30 days.
+        isk = g["average"] * g["volume"]
+        f["isk_30"] = isk.rolling(30).median()
+        cov = r1.rolling(30).cov(r1.shift(1))
+        f["roll_30"] = 2 * np.sqrt((-cov).clip(lower=0))          # Roll implied spread (bid-ask bounce)
+        f["amihud_30"] = np.log1p(1e9 * r1.abs().rolling(30).sum() / isk.rolling(30).sum().replace(0, np.nan))
+        f["zero_30"] = (g["volume"] == 0).rolling(30).mean()
         lv = np.log1p(g["volume"])
         f["volume_z"] = (lv - lv.rolling(30).mean()) / (lv.rolling(30).std() + 1e-9)
         f["dow"] = g["date"].dt.day_of_week
@@ -56,7 +78,20 @@ def build_features(history: pd.DataFrame, horizon: int = 7) -> pd.DataFrame: #Ho
 
 
 FEATURES = [f"ret_{l}" for l in LAGS] + ["vol_7", "vol_30", "ma_ratio_7", "ma_ratio_30",
-                                         "range_pct", "volume_z", "dow"]
+                                         "range_pct", "volume_z", "dow", "roll_30", "amihud_30", "zero_30"]
+
+
+def apply_health_floor(feats: pd.DataFrame, min_isk: float = DEFAULT_MIN_ISK) -> tuple[pd.DataFrame, list[str]]:
+    """Keep only liquid markets. Drops every day on which an item's median ISK traded over the
+    previous 30 days was under `min_isk` (so the backtest never trains or scores on thin days),
+    and drops items that are under the floor today. Returns the kept rows and the names of
+    the items left out."""
+    if not min_isk:
+        return feats, []
+    latest = feats.sort_values("date").groupby("type_id").tail(1)
+    out = latest[~(latest["isk_30"] >= min_isk) | (latest["date"] < feats["date"].max() - pd.Timedelta(days=7))]
+    kept = feats[(feats["isk_30"] >= min_isk) & ~feats["type_id"].isin(out["type_id"])]
+    return kept, sorted(out["name"].astype(str))
 
 
 def make_models() -> dict:
@@ -129,7 +164,7 @@ def predict_latest(feats: pd.DataFrame, model_name: str = "gbm") -> pd.DataFrame
 # Station-level model: predicts the hub station's own mid price (from hourly order-book
 # snapshots), using the regional features above plus the station's premium and momentum.
 # ---------------------------------------------------------------------------
-STATION_FEATURES = FEATURES + ["premium", "sret_1", "sret_3", "sret_7", "spread"]
+STATION_FEATURES = FEATURES + ["premium", "sret_1", "sret_3", "sret_7", "spread", "imbalance"]
 MIN_STATION_DAYS = 45  # days of snapshots needed before the station model is trained
 
 
@@ -146,13 +181,19 @@ def build_station_features(regional: pd.DataFrame, station: pd.DataFrame, horizo
     st = station.copy()
     st["date"] = st["taken_at"].dt.tz_localize(None).dt.normalize() if st["taken_at"].dt.tz else st["taken_at"].dt.normalize()
     st["spread_raw"] = (st["ask_top5"].fillna(st["best_ask"]) - st["bid_top5"].fillna(st["best_bid"])) / st["mid"]
-    daily = st.sort_values("taken_at").groupby(["type_id", "date"]).agg(mid=("mid", "last"), spread=("spread_raw", "median")).reset_index()
+    if {"bid_depth", "ask_depth"} <= set(st.columns):  # book imbalance: ISK within 5% of best, bid vs ask
+        st["imb_raw"] = ((st["bid_depth"] - st["ask_depth"]) / (st["bid_depth"] + st["ask_depth"]).replace(0, np.nan))
+    else:
+        st["imb_raw"] = np.nan
+    daily = st.sort_values("taken_at").groupby(["type_id", "date"]).agg(
+        mid=("mid", "last"), spread=("spread_raw", "median"), imbalance=("imb_raw", "median")).reset_index()
     frames = []
     for type_id, g in daily.groupby("type_id"):
         g = g.set_index("date").asfreq("D")
         g["type_id"] = type_id
         g["mid"] = g["mid"].ffill()
         g["spread"] = g["spread"].ffill()
+        g["imbalance"] = g["imbalance"].ffill().fillna(0.0)  # snapshots from before depth was recorded
         logm = np.log(g["mid"])
         for lag in (1, 3, 7):
             g[f"sret_{lag}"] = logm - logm.shift(lag)
