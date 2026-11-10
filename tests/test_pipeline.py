@@ -74,3 +74,34 @@ def test_dashboard_api(tmp_path):
     assert client.get(f"/api/history/{ids[0][1]}").status_code == 200
     pred = client.get("/api/predictions?list=core&model=ridge&horizon=7").get_json()
     assert len(pred["items"]) == 3 and {r["model"] for r in pred["summary"]} == {"no_change", "momentum", "ridge", "gbm"}
+
+
+def test_backfill_trims_to_tracked_items():
+    import bz2
+    from eve_market.backfill import _wanted_key, fetch_and_trim
+
+    csv_text = ("date,region_id,type_id,average,highest,lowest,volume,order_count\n"
+                "2017-03-01,10000002,34,5.0,5.1,4.9,1000,10\n"       # kept: Jita mineral
+                "2017-03-01,10000043,34,5.5,5.6,5.4,500,4\n"         # dropped: other region
+                "2017-03-01,10000002,99999,1.0,1.0,1.0,1,1\n"        # dropped: untracked item
+                "2017-03-01,19000001,44992,3e6,3e6,3e6,10,2\n")      # kept: PLEX global market
+
+    class FakeResp:
+        content = bz2.compress(csv_text.encode())
+        def raise_for_status(self): pass
+
+    class FakeSession:
+        def get(self, url, timeout): return FakeResp()
+
+    keep = _wanted_key({"Tritanium": 34, "PLEX": 44992}, {"PLEX": 19000001}, 10000002)
+    rows = fetch_and_trim(FakeSession(), "x", keep)
+    assert sorted((r[0], r[1]) for r in rows) == [(10000002, 34), (19000001, 44992)]
+
+
+def test_read_history_prefers_higher_volume_region(tmp_path):
+    conn = storage.connect(tmp_path / "p.db")
+    base = {"date": "2025-01-01", "average": 1.0, "highest": 1.0, "lowest": 1.0, "order_count": 1}
+    storage.upsert_history(conn, 10000002, 44992, [{**base, "volume": 5}])
+    storage.upsert_history(conn, 19000001, 44992, [{**base, "average": 2.0, "volume": 50}])
+    df = storage.read_history(conn, [44992])
+    assert len(df) == 1 and df.loc[0, "region_id"] == 19000001

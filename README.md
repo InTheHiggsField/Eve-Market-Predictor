@@ -11,6 +11,7 @@ pip install -r requirements.txt
 ### Usage
 ```
 python -m eve_market collect     # ~13 months of daily history for every tracked item + a live order-book snapshot
+python -m eve_market backfill    # one-off: daily history back to 2003 from the EVE Ref archive (~resumable)
 python -m eve_market backtest    # walk-forward evaluation vs. naive baselines
 python -m eve_market forecast --out data/forecast.csv   # predicted 7-day % change per item
 python -m eve_market dashboard   # local website at http://127.0.0.1:5000

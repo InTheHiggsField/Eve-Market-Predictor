@@ -3,6 +3,7 @@
     python -m eve_market collect              # fetch history + order snapshots for the watchlist
     python -m eve_market backtest             # walk-forward evaluation of the models
     python -m eve_market forecast             # predicted % change over the horizon, per item
+    python -m eve_market backfill             # older history (back to 2003) from the EVE Ref archive
     python -m eve_market dashboard            # local website at http://127.0.0.1:5000
 """
 from __future__ import annotations
@@ -42,6 +43,13 @@ def main(argv: list[str] | None = None) -> None:
     sub.choices["forecast"].add_argument("--model", choices=["gbm", "ridge"], default="gbm")
     sub.choices["forecast"].add_argument("--out", help="write predictions to this CSV")
 
+    b = sub.add_parser("backfill", help="load older daily history from the EVE Ref archive")
+    b.add_argument("--list", choices=ITEM_LISTS, default="all")
+    b.add_argument("--start", default="2003-10-01", help="first day (YYYY-MM-DD), default: earliest available")
+    b.add_argument("--end", help="last day (default: today)")
+    b.add_argument("--workers", type=int, default=4, help="parallel downloads")
+    b.add_argument("--force", action="store_true", help="re-fetch days already backfilled")
+
     d = sub.add_parser("dashboard", help="serve the local dashboard")
     d.add_argument("--port", type=int, default=5000)
     d.add_argument("--host", default="127.0.0.1")
@@ -52,6 +60,11 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.cmd == "collect":
         collect(ITEM_LISTS[args.list], args.region, args.location, REGION_OVERRIDES, args.db, not args.no_snapshots)
+        return
+
+    if args.cmd == "backfill":
+        from .backfill import backfill
+        backfill(ITEM_LISTS[args.list], REGION_OVERRIDES, args.start, args.end, args.db, args.workers, args.force)
         return
 
     if args.cmd == "dashboard":

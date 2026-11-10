@@ -19,10 +19,11 @@
   <thead><tr><th>Endpoint</th><th>What we keep</th></tr></thead>
   <tbody>
     <tr><td><code>/markets/{region}/history</code></td><td>One row per item per day: average, highest and lowest trade price, units traded, number of trades. ESI serves about 13 months.</td></tr>
+    <tr><td><a href="https://data.everef.net/market-history/" target="_blank" rel="noopener">EVE Ref archive</a></td><td>Older daily history in the same format, archived from ESI back to 2003-10-01. <code>backfill</code> streams each day's file, keeps only the tracked items, and stores them; nothing else is saved to disk.</td></tr>
     <tr><td><code>/markets/{region}/orders</code></td><td>A snapshot of the live order book each time you collect: best bid, best ask, and total volume on each side at Jita 4-4.</td></tr>
   </tbody>
 </table>
-<p>Items trade in The Forge (Jita). PLEX is the exception: it moved to its own global market (region <code>{{ region_overrides['PLEX'] }}</code>), so it is fetched from there and its order snapshot covers the whole market rather than one station.</p>
+<p>Items trade in The Forge (Jita). PLEX is the exception: it moved to its own global market (region <code>{{ region_overrides['PLEX'] }}</code>), so current data is fetched from there and its order snapshot covers the whole market rather than one station. Its older Jita history is kept too; if both markets have a row for the same day, the one with more volume is used. Items only have history from their release (for example, today's PLEX and skill injectors date from 2016–2017).</p>
 <p>Data is stored in a local SQLite file, <code>data/market.db</code>. Collecting again updates history in place and appends a new order snapshot, so running it daily builds a bid/ask history that ESI doesn't keep for you.</p>
 
 <h2>What the model predicts</h2>
@@ -67,7 +68,7 @@
   <li>On liquid commodities, Ridge beats the baseline modestly (about 4% lower error, ~60% direction accuracy).</li>
   <li>The daily average mixes buy-order and sell-order fills, so part of any day-to-day "move" is just which side traded more. That flatters direction accuracy.</li>
   <li>The backtest ignores broker fees, sales tax, and how much you could actually trade without moving the price.</li>
-  <li>Thirteen months of history is short; seasonal effects can't be learned yet.</li>
+  <li>Markets from a decade ago behaved differently (fewer players, different game mechanics), so old history adds examples but not always relevant ones.</li>
 </ul>
 <p>Nothing here is financial advice, in-game or otherwise.</p>
 
@@ -78,6 +79,7 @@
 pip install -r requirements.txt
 
 python -m eve_market collect                    # both lists, ~30 seconds
+python -m eve_market backfill                   # one-off: history back to 2003 (several GB streamed; re-run to resume)
 python -m eve_market backtest --list commodities
 python -m eve_market forecast --list core --model ridge --out data/forecast.csv
 python -m eve_market dashboard                  # this site, at http://127.0.0.1:5000</code></pre>

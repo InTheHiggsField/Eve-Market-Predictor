@@ -68,12 +68,16 @@ def save_type_names(conn: sqlite3.Connection, items: dict[str, int]) -> None:
 
 
 def read_history(conn: sqlite3.Connection, type_ids: list[int]) -> pd.DataFrame:
-    """History for the given types, whichever region each was collected from."""
+    """History for the given types, whichever region each was collected from.
+
+    If an item has rows from two regions on the same day (PLEX around its move from Jita to
+    the global market), the row with the larger traded volume wins."""
     marks = ",".join("?" * len(type_ids))
     df = pd.read_sql_query(
         f"SELECT h.*, t.name FROM history h LEFT JOIN types t USING (type_id) "
-        f"WHERE h.type_id IN ({marks}) ORDER BY type_id, date",
+        f"WHERE h.type_id IN ({marks}) ORDER BY type_id, date, volume DESC",
         conn, params=tuple(type_ids),
     )
+    df = df.drop_duplicates(["type_id", "date"], keep="first").reset_index(drop=True)
     df["date"] = pd.to_datetime(df["date"])
     return df
