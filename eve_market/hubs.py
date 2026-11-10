@@ -81,11 +81,12 @@ def scan(client: ESIClient | None = None, workers: int = 10, top: int = 60) -> l
 
 
 def print_hubs(rows: list[dict], security: str | None = None) -> None:
+    hint = "no docking access for this character" if auth.has_login() else "log in to see name"
     for r in rows:
         cls = security_class(r["security"]) if r["security"] is not None else "?"
         if security and cls not in (security, "?"):
             continue
-        name = r["name"] or f"(citadel {r['location_id']}; log in to see name)"
+        name = r["name"] or f"(citadel {r['location_id']}; {hint})"
         sec = f"{r['security']:.2f}" if r["security"] is not None else "  ? "
         print(f"{cls:>4} {sec:>5}  {r['orders']:5d} orders  {r['types']:2d}/{len(SAMPLE_TYPES)} items  "
               f"region {r['region_id']}  id {r['location_id']}  {name}")
