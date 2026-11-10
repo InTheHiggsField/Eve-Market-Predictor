@@ -19,7 +19,7 @@ from .esi import JITA_4_4, THE_FORGE
 from .forecast import backtest, build_features, predict_latest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from data_sets.tracked_items import REGION_OVERRIDES, TRACKED_ITEMS  # noqa: E402
+from data_sets.tracked_items import ITEM_LISTS, REGION_OVERRIDES  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -29,12 +29,15 @@ def main(argv: list[str] | None = None) -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     c = sub.add_parser("collect")
+    c.add_argument("--list", choices=ITEM_LISTS, default="all", help="which item list to collect (default: all)")
     c.add_argument("--no-snapshots", action="store_true", help="skip live order-book snapshots")
     c.add_argument("--location", type=int, default=JITA_4_4, help="station for order snapshots (default Jita 4-4)")
 
     for name in ("backtest", "forecast"):
         s = sub.add_parser(name)
         s.add_argument("--horizon", type=int, default=7, help="days ahead to forecast")
+        s.add_argument("--list", choices=ITEM_LISTS, default="core",
+                       help="core = PLEX/injectors/ships, commodities = minerals/ore/components")
     sub.choices["forecast"].add_argument("--model", choices=["gbm", "ridge"], default="gbm")
     sub.choices["forecast"].add_argument("--out", help="write predictions to this CSV")
 
@@ -43,11 +46,11 @@ def main(argv: list[str] | None = None) -> None:
     pd.set_option("display.width", 160, "display.max_rows", 200)
 
     if args.cmd == "collect":
-        collect(TRACKED_ITEMS, args.region, args.location, REGION_OVERRIDES, args.db, not args.no_snapshots)
+        collect(ITEM_LISTS[args.list], args.region, args.location, REGION_OVERRIDES, args.db, not args.no_snapshots)
         return
 
     conn = storage.connect(args.db)
-    feats = build_features(storage.read_history(conn, list(TRACKED_ITEMS.values())), args.horizon)
+    feats = build_features(storage.read_history(conn, list(ITEM_LISTS[args.list].values())), args.horizon)
     if args.cmd == "backtest":
         res = backtest(feats, args.horizon)
         print(res.to_string(index=False))

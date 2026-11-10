@@ -23,6 +23,50 @@ TRACKED_ITEMS = {
     "Loki": 29990,
 }
 
+# Commodities: minerals, compressed ore, and ship components (approved list, Nov 2026).
+COMMODITY_ITEMS = {
+    # Standard minerals
+    "Tritanium": 34,
+    "Pyerite": 35,
+    "Mexallon": 36,
+    "Isogen": 37,
+    "Nocxium": 38,
+    "Zydrine": 39,
+    "Megacyte": 40,
+    "Morphite": 11399,
+    # Specialty minerals (thinly traded; forecasts will be noisy)
+    "Crystalline Polycrase": 92570,
+    "Crystalline Moissanite": 92571,
+    "Crystalline Raspite": 92569,
+    "Crystalline Kangite": 92572,
+    "Neo-Jadarite": 76374,
+    "Eleutrium": 88087,
+    "Chromodynamic Tricarboxyls": 48927,
+    # Compressed ore
+    "Compressed Gneiss IV-Grade": 62555,
+    "Compressed Zeolites": 62463,
+    "Compressed Veldspar": 62516,
+    "Compressed Scordite": 62520,
+    "Compressed Bitumens": 62454,
+    # T2 ship components
+    "Zero-Point Field Manipulator": 52312,
+    "Auto-Integrity Preservation Seal": 57478,
+    "Life Support Backup Unit": 57486,
+    "Photon Microprocessor": 11541,
+    "Quantum Microprocessor": 11540,
+    "Core Temperature Regulator": 57479,
+    # Capital components
+    "Neurolink Protection Cell": 57488,
+    "Capital Core Temperature Regulator": 57487,
+    "Capital Construction Parts": 21037,
+}
+
+ITEM_LISTS = {
+    "core": TRACKED_ITEMS,
+    "commodities": COMMODITY_ITEMS,
+    "all": {**TRACKED_ITEMS, **COMMODITY_ITEMS},
+}
+
 # PLEX trades on its own global market rather than in Jita (The Forge).
 GLOBAL_PLEX_MARKET = 19000001
 REGION_OVERRIDES = {"PLEX": GLOBAL_PLEX_MARKET}
