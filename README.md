@@ -27,6 +27,14 @@ The tracked items live in `data_sets/tracked_items.py` as `{"in-game name": type
 re-running `collect` upserts history and appends a new order snapshot, so run it daily (e.g. Task Scheduler)
 to build up bid/ask history that ESI does not keep for you.
 
+### Station prices (hourly snapshots)
+ESI only has region-level history, so station prices are built from order-book snapshots. A Windows scheduled
+task, **EVE Market Collect**, runs `scheduled_collect.pyw` every hour: it snapshots every hub station and refreshes
+daily history when it's over 12 hours old (log: `data/collect.log`). The dashboard shows the station mid price and
+its premium over the region average. After ~45 days of snapshots a station-level model takes over the station
+forecasts (`.\eve backtest --station --market Jita`). To remove the task:
+`Unregister-ScheduledTask -TaskName "EVE Market Collect"`.
+
 ### Character login (citadel markets)
 Player-owned citadels (e.g. low-sec trade Keepstars) need a logged-in character:
 1. Create an app at https://developers.eveonline.com/applications with callback `http://localhost:8765/callback`

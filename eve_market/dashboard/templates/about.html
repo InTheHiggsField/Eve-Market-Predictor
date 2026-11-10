@@ -35,6 +35,14 @@
 <p>Items are fetched from each hub's region. PLEX is the exception: it moved to its own global market (region <code>{{ region_overrides['PLEX'] }}</code>), so current data is fetched from there and its order snapshot covers the whole market rather than one station. Its older Jita history is kept too; if both markets have a row for the same day, the one with more volume is used. Items only have history from their release (for example, today's PLEX and skill injectors date from 2016–2017).</p>
 <p>Data is stored in a local SQLite file, <code>data/market.db</code>. Collecting again updates history in place and appends a new order snapshot, so running it daily builds a bid/ask history that ESI doesn't keep for you.</p>
 
+<h2>Station prices</h2>
+<p>Players trade at a specific station, not "in a region", so the hub station's own price is what matters. ESI has no per-station history, so the tool builds one: a Windows scheduled task (<i>EVE Market Collect</i>) runs every hour and saves each hub station's order book.</p>
+<ul>
+  <li><b>Station mid</b> is halfway between the best 5% of buy volume and the best 5% of sell volume at the station, ignoring orders more than 20% from the best price. That's steadier than the single best order, which can be one bait unit or a huge lowball buy order.</li>
+  <li><b>Premium</b> is how far the station mid sits from the region's daily average. It's small in Jita (about 3%), where the station does nearly all the region's trading, and larger at the smaller hubs (up to about 11% in Rens).</li>
+  <li><b>Station forecast</b>: until there are {{ min_station_days }} days of hourly snapshots, the regional forecast's percentage move is applied to the current station mid. After that, a <b>station model</b> takes over. It uses the regional features above plus the station premium, the station's own 1/3/7-day returns and its spread, and predicts the station mid directly. The Predictions page says which one is in use.</li>
+</ul>
+
 <h2>What the model predicts</h2>
 <p>For each item and day <i>t</i>, the target is the <b>log return of the daily average price over the next <i>h</i> days</b>: <code>log(price[t+h] / price[t])</code>, with <i>h</i> = 7 by default. A log return of 0.05 is roughly a 5% rise. Days with no trades carry the last price forward with zero volume.</p>
 <p>Each day is described by these features, all computed only from data up to that day:</p>
@@ -91,7 +99,9 @@ python -m eve_market collect                    # both lists, ~30 seconds
 python -m eve_market backfill                   # one-off: history back to 2003 (several GB streamed; re-run to resume)
 python -m eve_market backtest --list commodities --market Amarr
 python -m eve_market forecast --list core --model ridge --out data/forecast.csv
-python -m eve_market dashboard                  # this site, at http://127.0.0.1:5000</code></pre>
+python -m eve_market dashboard                  # this site, at http://127.0.0.1:5000
+python -m eve_market backtest --station --market Jita   # station model, once enough snapshots exist</code></pre>
+<p>On Windows, run these through the included <code>eve</code> wrapper (<code>.\eve collect</code>) or after activating the venv. The hourly task runs <code>scheduled_collect.pyw</code>, which takes snapshots every hour and refreshes daily history every 12 hours; its log is <code>data/collect.log</code>. Remove it with <code>Unregister-ScheduledTask -TaskName "EVE Market Collect"</code>.</p>
 <p>Options: <code>--market Jita|Amarr|Dodixie|Hek|Rens|Zarzakh</code> (collect and backfill take several, default all), <code>--list core|commodities|all</code>, <code>--horizon N</code>, <code>--model ridge|gbm</code>, and for the dashboard <code>--port</code>. To keep data current, schedule <code>python -m eve_market collect</code> once a day (ESI history updates shortly after downtime, 11:00 UTC). Refresh this page after collecting; predictions retrain automatically when new data arrives.</p>
 <p>To track a different item, add its name and <code>type_id</code> to one of the dictionaries in <code>data_sets/tracked_items.py</code> (and a display group in <code>ITEM_GROUPS</code>), then collect again. Type IDs can be looked up in <code>data_sets/invTypes_clean.csv</code>.</p>
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import logging
 
+import numpy as np
 import pandas as pd
 
 from . import storage
@@ -29,6 +30,10 @@ def main(argv: list[str] | None = None) -> None:
     c = sub.add_parser("collect")
     c.add_argument("--list", choices=ITEM_LISTS, default="all", help="which item list to collect (default: all)")
     c.add_argument("--no-snapshots", action="store_true", help="skip live order-book snapshots")
+    c.add_argument("--snapshots-only", action="store_true", help="only order-book snapshots (skip daily history)")
+    c.add_argument("--auto", action="store_true",
+                   help="for scheduled runs: always snapshot, refresh history only if it's over 12h old")
+    c.add_argument("--log-file", help="append log output to this file")
     c.add_argument("--market", nargs="+", choices=MARKETS, default=list(MARKETS), help="hubs to collect (default: all)")
 
     for name in ("backtest", "forecast"):
@@ -37,6 +42,8 @@ def main(argv: list[str] | None = None) -> None:
         s.add_argument("--list", choices=ITEM_LISTS, default="core",
                        help="core = PLEX/injectors/ships, commodities = minerals/ore/components")
         s.add_argument("--market", choices=MARKETS, default=DEFAULT_MARKET, help="trade hub (default: Jita)")
+        s.add_argument("--station", action="store_true",
+                       help="model the hub station's own price (needs ~45 days of hourly snapshots)")
     sub.choices["forecast"].add_argument("--model", choices=["gbm", "ridge"], default="gbm")
     sub.choices["forecast"].add_argument("--out", help="write predictions to this CSV")
 
@@ -63,7 +70,14 @@ def main(argv: list[str] | None = None) -> None:
     pd.set_option("display.width", 160, "display.max_rows", 200)
 
     if args.cmd == "collect":
-        collect(ITEM_LISTS[args.list], {m: MARKETS[m] for m in args.market}, REGION_OVERRIDES, args.db, not args.no_snapshots)
+        from .collect import history_is_stale
+        if args.log_file:
+            fh = logging.FileHandler(args.log_file, encoding="utf-8")
+            fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+            logging.getLogger().addHandler(fh)
+        history = not args.snapshots_only and (not args.auto or history_is_stale(args.db))
+        collect(ITEM_LISTS[args.list], {m: MARKETS[m] for m in args.market}, REGION_OVERRIDES, args.db,
+                snapshots=not args.no_snapshots, history=history)
         return
 
     if args.cmd in ("login", "whoami"):
@@ -93,6 +107,26 @@ def main(argv: list[str] | None = None) -> None:
 
     conn = storage.connect(args.db)
     feats = build_features(load_history(conn, args.list, args.market), args.horizon)
+    if args.station:
+        from .forecast import MIN_STATION_DAYS, build_station_features, predict_station, station_days
+        st = storage.read_station_prices(conn, MARKETS[args.market]["station_id"],
+                                         list(ITEM_LISTS[args.list].values())).dropna(subset=["mid"])
+        days = station_days(st)
+        res = predict_station(build_station_features(feats, st, args.horizon), "ridge" if args.cmd == "backtest"
+                              else args.model, args.horizon) if days >= MIN_STATION_DAYS else None
+        if res is None:
+            print(f"Station model not ready: {days} of {MIN_STATION_DAYS} days of snapshots at "
+                  f"{MARKETS[args.market]['station']}. The hourly task keeps adding them.")
+            return
+        metrics, latest = res
+        if args.cmd == "backtest":
+            print(metrics.groupby("model")[["mae", "direction_acc"]].mean().sort_values("mae").to_string())
+        else:
+            latest["pred_pct_change"] = (np.exp(latest["pred"]) - 1) * 100
+            latest["pred_station_price"] = latest["mid"] * np.exp(latest["pred"])
+            print(latest[["type_id", "name", "date", "mid", "pred_station_price", "pred_pct_change"]]
+                  .sort_values("pred_pct_change", ascending=False).to_string(index=False))
+        return
     if args.cmd == "backtest":
         res = backtest(feats, args.horizon)
         print(res.to_string(index=False))

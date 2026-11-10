@@ -61,6 +61,9 @@ function renderCards() {
         <span>Range <b>${fmtIsk(i.pred_low)}–${fmtIsk(i.pred_high)}</b></span>
         <span>Hit rate <b>${i.direction_acc === null ? "–" : (i.direction_acc * 100).toFixed(0) + "%"}</b></span>
       </div>
+      ${i.station_mid ? `<div class="stats"><span>At station <b>${fmtIsk(i.station_mid)}</b> (${fmtPct(i.station_premium_pct)} vs region)</span>
+        <span>Station forecast <b class="${pctClass(i.station_pred_pct)}">${fmtIsk(i.station_pred)}</b></span>
+        <span title="${esc(i.station_method)}">${i.station_method === "station model" ? "station model" : "regional model"}</span></div>` : ""}
       <div class="chart-box small"><canvas></canvas></div>
     </div>`).join("");
   const accent = css("--accent"), warn = css("--warn"), up = css("--up"), down = css("--down");
@@ -76,6 +79,11 @@ function renderCards() {
     fc[last] = lo[last] = hi[last] = i.price;
     fc[t] = i.pred_price; lo[t] = i.pred_low; hi[t] = i.pred_high;
     const color = i.pred_pct >= 0 ? up : down;
+    const stMid = labels.map(() => null);
+    if (i.station_daily) i.station_daily.dates.forEach((d, k) => { if (d in idx) stMid[idx[d]] = i.station_daily.mid[k]; });
+    const stFc = labels.map(() => null);
+    if (i.station_pred) { const lastSt = i.station_daily ? idx[i.station_daily.dates.at(-1)] : undefined;
+      if (lastSt !== undefined) stFc[lastSt] = i.station_mid; stFc[t] = i.station_pred; }
     charts.push(new Chart(document.querySelector(`#card-${i.type_id} canvas`), {
       type: "line",
       data: { labels, datasets: [
@@ -85,16 +93,33 @@ function renderCards() {
         { label: "Range low", data: lo, borderColor: "transparent", pointRadius: 0, spanGaps: true },
         { label: "Forecast", data: fc, borderColor: color, borderDash: [5, 4], borderWidth: 2, spanGaps: true,
           pointRadius: fc.map(v => v === null ? 0 : 3), pointBackgroundColor: color },
+        { label: "Station mid", data: stMid, borderColor: css("--text"), backgroundColor: css("--text"), borderWidth: 1.5,
+          pointRadius: 2.5, spanGaps: true, hidden: !i.station_daily },
+        { label: "Station forecast", data: stFc, borderColor: css("--text"), borderDash: [2, 3], borderWidth: 1.5, spanGaps: true,
+          pointRadius: stFc.map(v => v === null ? 0 : 3), hidden: !i.station_pred },
       ] },
       options: { maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
-        plugins: { legend: { labels: { filter: l => !l.text.startsWith("Range"), font: { size: 11 } } },
+        plugins: { legend: { labels: { filter: l => !l.text.startsWith("Range") && !l.hidden, font: { size: 11 } } },
           tooltip: { filter: c => c.raw !== null, callbacks: { label: c => `${c.dataset.label}: ${fmtIsk(c.raw)}` } } },
         scales: { x: { ticks: { maxTicksLimit: 5, font: { size: 10 } } }, y: { ticks: { callback: fmtIsk, font: { size: 10 } } } } },
     }));
   });
 }
 
-function renderAll() { renderSummary(); renderRank(); renderCards(); }
+function renderStationStatus() {
+  const s = data.station, el = document.getElementById("station-status");
+  el.hidden = false;
+  if (s.ready) {
+    const base = s.summary.find(r => r.model === "no_change").mae, sel = s.summary.find(r => r.model === state.model);
+    el.innerHTML = `<b>Station model active</b> for ${esc(s.name)} (${s.days} days of snapshots). Station forecasts below come from it: ` +
+      `error ${fmtPct((sel.mae / base - 1) * 100)} vs. no change, direction right ${(sel.direction_acc * 100).toFixed(0)}% of the time.`;
+  } else {
+    el.innerHTML = `<b>Station prices:</b> collecting hourly order-book snapshots at ${esc(s.name)} ` +
+      `(${s.days} of ${s.needed} days so far). Until then, each station forecast applies the regional forecast to the station's current mid price.`;
+  }
+}
+
+function renderAll() { renderSummary(); renderStationStatus(); renderRank(); renderCards(); }
 
 async function load() {
   const my = ++reqId;

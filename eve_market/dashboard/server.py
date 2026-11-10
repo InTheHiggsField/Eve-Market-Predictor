@@ -15,7 +15,8 @@ from flask import Flask, abort, jsonify, render_template, request
 
 from .. import storage
 from ..config import DEFAULT_MARKET, ITEM_GROUPS, ITEM_LISTS, MARKETS, REGION_OVERRIDES, load_history
-from ..forecast import FEATURES, backtest, build_features, make_models
+from ..forecast import (FEATURES, MIN_STATION_DAYS, backtest, build_features, build_station_features, make_models,
+                        predict_station, station_days)
 
 HERE = Path(__file__).resolve().parent
 LIST_OF = {name: lst for lst in ("core", "commodities") for name in ITEM_LISTS[lst]}
@@ -61,7 +62,7 @@ def create_app(db_path: str | Path = storage.DEFAULT_DB) -> Flask:
     def about_page():
         return render_template("about.html", page="about", region_overrides=REGION_OVERRIDES, markets=MARKETS,
                                features=FEATURES, n_core=len(ITEM_LISTS["core"]),
-                               n_commod=len(ITEM_LISTS["commodities"]))
+                               n_commod=len(ITEM_LISTS["commodities"]), min_station_days=MIN_STATION_DAYS)
 
     # ---------- API ----------
     @app.get("/api/items")
@@ -90,12 +91,18 @@ def create_app(db_path: str | Path = storage.DEFAULT_DB) -> Flask:
                 "orders_30d": float(g30["order_count"].mean()),
                 "spark": [float(x) for x in p.tail(30)],
                 "best_bid": None, "best_ask": None, "spread_pct": None, "snapshot_at": None,
+                "station_mid": None, "premium_pct": None,
             }
             if type_id in snaps.index:
                 s = snaps.loc[type_id]
                 bid, ask = s["best_bid"], s["best_ask"]
                 row.update(best_bid=_num(bid), best_ask=_num(ask), snapshot_at=s["taken_at"],
                            spread_pct=_num((ask - bid) / ask * 100) if bid and ask else None)
+                b5 = s["bid_top5"] if "bid_top5" in s and pd.notna(s["bid_top5"]) else bid
+                a5 = s["ask_top5"] if "ask_top5" in s and pd.notna(s["ask_top5"]) else ask
+                if b5 and a5 and pd.notna(b5) and pd.notna(a5):
+                    mid = (float(b5) + float(a5)) / 2
+                    row.update(station_mid=mid, premium_pct=(mid / float(last) - 1) * 100)
             out.append(row)
         return jsonify(out)
 
@@ -111,6 +118,21 @@ def create_app(db_path: str | Path = storage.DEFAULT_DB) -> Flask:
             **{c: g[c].astype(float).tolist() for c in ("average", "highest", "lowest", "volume", "order_count")},
         })
 
+    @app.get("/api/station/<int:type_id>")
+    def api_station(type_id: int):
+        """The hub station's own price series, from every order-book snapshot taken there."""
+        market = market_arg()
+        with conn() as c:
+            st = storage.read_station_prices(c, MARKETS[market]["station_id"], [type_id])
+        st = st.dropna(subset=["mid"])
+        return jsonify({
+            "market": market, "station": MARKETS[market]["station"],
+            "times": st["taken_at"].dt.strftime("%Y-%m-%d %H:%M").tolist(),
+            "mid": st["mid"].tolist(),
+            "bid": st["bid_top5"].fillna(st["best_bid"]).tolist(),
+            "ask": st["ask_top5"].fillna(st["best_ask"]).tolist(),
+        })
+
     @app.get("/api/predictions")
     def api_predictions():
         market = market_arg()
@@ -120,7 +142,8 @@ def create_app(db_path: str | Path = storage.DEFAULT_DB) -> Flask:
         if model not in make_models() or not 1 <= horizon <= 30 or list_name not in ITEM_LISTS:
             abort(400)
         with conn() as c:  # cache is keyed on the latest data date so a new collect invalidates it
-            stamp = c.execute("SELECT MAX(date) || COUNT(*) FROM history").fetchone()[0]
+            stamp = c.execute("SELECT (SELECT MAX(date) || COUNT(*) FROM history) || "
+                              "(SELECT IFNULL(MAX(taken_at), '') FROM order_snapshots)").fetchone()[0]
         with _lock:
             return jsonify(_predictions(str(db_path), market, list_name, model, horizon, stamp))
 
@@ -135,6 +158,7 @@ def _num(x):
 def _predictions(db_path: str, market: str, list_name: str, model_name: str, horizon: int, _stamp: str) -> dict:
     with closing(storage.connect(db_path)) as c:
         hist = load_history(c, list_name, market)
+        station = storage.read_station_prices(c, MARKETS[market]["station_id"], list(ITEM_LISTS[list_name].values()))
     feats = build_features(hist, horizon)
     metrics, oos = backtest(feats, horizon, return_predictions=True)
     summary = (metrics.groupby("model")[["mae", "direction_acc"]].mean()
@@ -144,6 +168,23 @@ def _predictions(db_path: str, market: str, list_name: str, model_name: str, hor
     model = make_models()[model_name].fit(train[FEATURES], train["target"])
     latest = feats.dropna(subset=FEATURES).sort_values("date").groupby("type_id").tail(1).copy()
     latest["pred"] = model.predict(latest[FEATURES])
+
+    # Station layer: the hub station's own mid price from order-book snapshots.
+    station = station.dropna(subset=["mid"])
+    days = station_days(station)
+    st_feats = build_station_features(feats, station, horizon)
+    st_result = predict_station(st_feats, model_name, horizon) if days >= MIN_STATION_DAYS else None
+    st_pred = {}
+    st_summary = None
+    if st_result is not None:
+        st_metrics, st_latest = st_result
+        st_pred = dict(zip(st_latest["type_id"].astype(int), st_latest["pred"]))
+        st_summary = (st_metrics.groupby("model")[["mae", "direction_acc"]].mean()
+                      .reindex(["no_change", "momentum", "ridge", "gbm"]).reset_index()
+                      .replace({np.nan: None}).to_dict("records"))
+    st_now = station.sort_values("taken_at").groupby("type_id").tail(1).set_index("type_id")
+    st_daily = (station.assign(day=station["taken_at"].dt.strftime("%Y-%m-%d"))
+                .sort_values("taken_at").groupby(["type_id", "day"])["mid"].last())
 
     items = []
     for _, r in latest.sort_values("pred", ascending=False).iterrows():
@@ -167,11 +208,22 @@ def _predictions(db_path: str, market: str, list_name: str, model_name: str, hor
                          "hit": (np.sign(o[model_name]) == np.sign(o["target"])).astype(int).tolist()},
             "direction_acc": float(np.mean(np.sign(o[model_name]) == np.sign(o["target"]))) if len(o) else None,
         })
+        it = items[-1]
+        if tid in st_now.index:
+            mid = float(st_now.loc[tid, "mid"])
+            p = st_pred.get(tid, r["pred"])  # station model if trained, else the regional forecast
+            it.update(station_mid=mid, station_pred=mid * float(np.exp(p)), station_pred_pct=float(np.expm1(p) * 100),
+                      station_method="station model" if tid in st_pred else "regional forecast applied to station price",
+                      station_premium_pct=(mid / float(r["average"]) - 1) * 100)
+            sd = st_daily.loc[tid] if tid in st_daily.index.get_level_values(0) else pd.Series(dtype=float)
+            it["station_daily"] = {"dates": list(sd.index), "mid": [float(x) for x in sd.values]}
     return {
         "market": market, "list": list_name, "model": model_name, "horizon": horizon,
         "summary": summary.replace({np.nan: None}).to_dict("records"),
         "folds": [{**rec, "fold_start": str(rec["fold_start"])} for rec in metrics.to_dict("records")],
         "items": items,
+        "station": {"name": MARKETS[market]["station"], "ready": st_result is not None, "days": days,
+                    "needed": MIN_STATION_DAYS, "summary": st_summary},
     }
 
 

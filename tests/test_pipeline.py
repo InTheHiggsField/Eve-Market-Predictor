@@ -153,3 +153,37 @@ def test_security_bands():
     from eve_market.hubs import security_class
     assert security_class(0.46) == "high" and security_class(0.44) == "low"
     assert security_class(0.04) == "low" and security_class(-0.2) == "null"
+
+
+def test_station_model_trains_on_enough_snapshots():
+    from eve_market.forecast import build_station_features, predict_station, station_days, MIN_STATION_DAYS
+    hist = _synthetic_history(n_items=4, n_days=300)
+    feats = build_features(hist, horizon=7)
+    rng = np.random.default_rng(1)
+    rows = []
+    for t in range(4):
+        g = hist[hist.type_id == t].tail(80)
+        for d, p in zip(g["date"], g["average"]):
+            for hour in (0, 12):
+                mid = p * 1.02 * np.exp(rng.normal(0, 0.005))
+                rows.append({"taken_at": d + pd.Timedelta(hours=hour), "type_id": t, "best_bid": mid * 0.99,
+                             "best_ask": mid * 1.01, "bid_top5": mid * 0.99, "ask_top5": mid * 1.01, "mid": mid})
+    station = pd.DataFrame(rows)
+    assert station_days(station) == 80 >= MIN_STATION_DAYS
+    sf = build_station_features(feats, station, horizon=7)
+    assert np.isclose(sf["premium"].dropna().median(), np.log(1.02), atol=0.01)
+    metrics, latest = predict_station(sf, "ridge", horizon=7)
+    assert len(latest) == 4 and {"ridge", "no_change"} <= set(metrics.model)
+    assert predict_station(sf[sf.date > sf.date.max() - pd.Timedelta(days=20)], "ridge", 7) is None
+
+
+def test_top_pct_price_ignores_bait_order():
+    from eve_market.collect import _top_pct_price
+    asks = [{"price": 9.0, "volume_remain": 1}, {"price": 10.0, "volume_remain": 1000}]
+    assert 9.5 < _top_pct_price(asks, highest_first=False) <= 10.0  # best order alone would say 9.0
+
+
+def test_top_pct_price_ignores_lowball_bids():
+    from eve_market.collect import _top_pct_price
+    bids = [{"price": 4.8e6, "volume_remain": 100}, {"price": 4.0e4, "volume_remain": 1_000_000}]
+    assert _top_pct_price(bids, highest_first=True) == 4.8e6

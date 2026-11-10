@@ -25,7 +25,12 @@ CREATE TABLE IF NOT EXISTS order_snapshots (
     best_bid REAL, best_ask REAL,
     bid_volume INTEGER, ask_volume INTEGER,
     bid_orders INTEGER, ask_orders INTEGER,
+    bid_top5 REAL, ask_top5 REAL,
     PRIMARY KEY (taken_at, region_id, location_id, type_id)
+);
+CREATE TABLE IF NOT EXISTS collect_runs (
+    taken_at TEXT PRIMARY KEY,
+    kind TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS types (
     type_id INTEGER PRIMARY KEY,
@@ -51,9 +56,16 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.executescript("""
             ALTER TABLE order_snapshots RENAME TO order_snapshots_old;
         """ + SCHEMA + """
-            INSERT INTO order_snapshots SELECT * FROM order_snapshots_old;
+            INSERT INTO order_snapshots (taken_at, region_id, location_id, type_id, best_bid, best_ask,
+                bid_volume, ask_volume, bid_orders, ask_orders)
+            SELECT taken_at, region_id, location_id, type_id, best_bid, best_ask,
+                bid_volume, ask_volume, bid_orders, ask_orders FROM order_snapshots_old;
             DROP TABLE order_snapshots_old;
         """)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(order_snapshots)")}
+    if cols and "bid_top5" not in cols:
+        conn.executescript("ALTER TABLE order_snapshots ADD COLUMN bid_top5 REAL;"
+                           "ALTER TABLE order_snapshots ADD COLUMN ask_top5 REAL;")
 
 
 def upsert_history(conn: sqlite3.Connection, region_id: int, type_id: int, rows: list[dict]) -> int:
@@ -74,6 +86,31 @@ def insert_snapshot(conn: sqlite3.Connection, row: dict) -> None:
     conn.execute(f"INSERT OR REPLACE INTO order_snapshots ({cols}) VALUES ({','.join('?' * len(row))})",
                  tuple(row.values()))
     conn.commit()
+
+
+def log_run(conn: sqlite3.Connection, taken_at: str, kind: str) -> None:
+    conn.execute("INSERT OR REPLACE INTO collect_runs VALUES (?, ?)", (taken_at, kind))
+    conn.commit()
+
+
+def last_run(conn: sqlite3.Connection, needs: str) -> str | None:
+    """Timestamp of the latest collect run that included `needs` ("history" or "snapshots")."""
+    return conn.execute("SELECT MAX(taken_at) FROM collect_runs WHERE kind LIKE ?", (f"%{needs}%",)).fetchone()[0]
+
+
+def read_station_prices(conn: sqlite3.Connection, station_id: int, type_ids: list[int]) -> pd.DataFrame:
+    """Every snapshot taken at one station: that station's own price series."""
+    marks = ",".join("?" * len(type_ids))
+    df = pd.read_sql_query(
+        f"SELECT taken_at, type_id, best_bid, best_ask, bid_top5, ask_top5, bid_volume, ask_volume "
+        f"FROM order_snapshots WHERE location_id = ? AND type_id IN ({marks}) ORDER BY type_id, taken_at",
+        conn, params=(station_id, *type_ids))
+    df["taken_at"] = pd.to_datetime(df["taken_at"])
+    # Mid price: halfway between the best 5% of bids and of asks, falling back to the single best orders.
+    bid = df["bid_top5"].fillna(df["best_bid"])
+    ask = df["ask_top5"].fillna(df["best_ask"])
+    df["mid"] = (bid + ask) / 2
+    return df
 
 
 def save_type_names(conn: sqlite3.Connection, items: dict[str, int]) -> None:

@@ -12,12 +12,35 @@ from . import storage
 log = logging.getLogger(__name__)
 
 
+def _top_pct_price(orders: list[dict], highest_first: bool, pct: float = 0.05) -> float | None:
+    """Volume-weighted price of the best `pct` of the book's volume. Much steadier than the single
+    best order, which can be one unit someone listed as bait. Orders more than 20% away from the
+    best price are ignored first, so huge lowball buy orders don't swamp the volume."""
+    if not orders:
+        return None
+    best = max(o["price"] for o in orders) if highest_first else min(o["price"] for o in orders)
+    orders = [o for o in orders if (o["price"] >= best * 0.8 if highest_first else o["price"] <= best * 1.2)]
+    total = sum(o["volume_remain"] for o in orders)
+    if not total:
+        return None
+    want, got, isk = max(total * pct, 1), 0, 0.0
+    for o in sorted(orders, key=lambda o: o["price"], reverse=highest_first):
+        take = min(o["volume_remain"], want - got)
+        got += take
+        isk += take * o["price"]
+        if got >= want:
+            break
+    return isk / got
+
+
 def summarize_orders(orders: list[dict], location_id: int | None) -> dict:
     if location_id is not None:
         orders = [o for o in orders if o["location_id"] == location_id]
     bids = [o for o in orders if o["is_buy_order"]]
     asks = [o for o in orders if not o["is_buy_order"]]
     return {
+        "bid_top5": _top_pct_price(bids, highest_first=True),
+        "ask_top5": _top_pct_price(asks, highest_first=False),
         "best_bid": max((o["price"] for o in bids), default=None),
         "best_ask": min((o["price"] for o in asks), default=None),
         "bid_volume": sum(o["volume_remain"] for o in bids),
@@ -29,12 +52,14 @@ def summarize_orders(orders: list[dict], location_id: int | None) -> dict:
 
 def collect(items: dict[str, int], markets: dict[str, dict], region_overrides: dict[str, int] | None = None,
             db_path=storage.DEFAULT_DB, snapshots: bool = True, client: ESIClient | None = None,
-            workers: int = 6) -> None:
+            workers: int = 6, history: bool = True) -> None:
     """Fetch history and order snapshots for every `{name: type_id}` item at every hub in `markets`.
 
     History is per region, so each (region, item) pair is fetched once. Items in `region_overrides`
     (PLEX on its global market) have one history for all hubs; their order book is still split
     by hub station, since global-market orders carry the station they were placed at.
+
+    `history=False` skips the daily history (it only changes once a day) for quick hourly snapshots.
     """
     client = client or ESIClient()
     region_overrides = region_overrides or {}
@@ -69,7 +94,7 @@ def collect(items: dict[str, int], markets: dict[str, dict], region_overrides: d
 
     def fetch(job):
         region, type_id = job
-        hist = client.market_history(type_id, region)
+        hist = client.market_history(type_id, region) if history else []
         orders = client.market_orders(type_id, region) if snapshots else []
         return job, hist, orders
 
@@ -81,10 +106,24 @@ def collect(items: dict[str, int], markets: dict[str, dict], region_overrides: d
             except Exception as exc:  # keep going; one bad request shouldn't kill the run
                 log.warning("fetch failed: %s", exc)
                 continue
-            n = storage.upsert_history(conn, region, type_id, hist)
+            n = storage.upsert_history(conn, region, type_id, hist) if hist else 0
             for station in jobs[(region, type_id)] if snapshots else []:
                 src = citadel_orders[station].get(type_id, []) if station in citadel_orders else orders
                 storage.insert_snapshot(conn, {"taken_at": taken_at, "region_id": region, "location_id": station,
                                                "type_id": type_id, **summarize_orders(src, station)})
-            log.info("[%d/%d] %s in region %s: %d history rows", i, len(jobs), names[type_id], region, n)
+            log.debug("[%d/%d] %s in region %s: %d history rows", i, len(jobs), names[type_id], region, n)
+    kind = "history+snapshots" if history and snapshots else "history" if history else "snapshots"
+    storage.log_run(conn, taken_at, kind)
+    log.info("Collected %d item/region pairs for %d hubs at %s (%s)", len(jobs), len(markets), taken_at, kind)
     conn.close()
+
+
+def history_is_stale(db_path=storage.DEFAULT_DB, hours: float = 12) -> bool:
+    """True if history hasn't been refreshed in `hours` (used by --auto for hourly runs)."""
+    conn = storage.connect(db_path)
+    last = storage.last_run(conn, "history")
+    conn.close()
+    if last is None:
+        return True
+    then = datetime.strptime(last, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - then).total_seconds() > hours * 3600

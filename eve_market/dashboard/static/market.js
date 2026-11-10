@@ -36,12 +36,12 @@ function renderTable() {
   document.querySelector("#tbl tbody").innerHTML = rows.length ? rows.map(i => `
     <tr data-id="${i.type_id}" class="${i.type_id === state.selected ? "selected" : ""}">
       <td>${esc(i.name)}</td><td><span class="tag">${esc(i.group)}</span></td>
-      <td class="num">${fmtIsk(i.price)}</td>${pc(i.chg_1d)}${pc(i.chg_7d)}${pc(i.chg_30d)}
+      <td class="num">${fmtIsk(i.price)}</td><td class="num">${fmtIsk(i.station_mid)}</td>${pc(i.premium_pct)}${pc(i.chg_1d)}${pc(i.chg_7d)}${pc(i.chg_30d)}
       <td class="num">${fmtIsk(i.best_bid)}</td><td class="num">${fmtIsk(i.best_ask)}</td>
       <td class="num">${i.spread_pct === null ? "–" : i.spread_pct.toFixed(1) + "%"}</td>
       <td class="num">${fmtIsk(i.volume_30d)}</td><td class="num">${fmtIsk(i.isk_30d)}</td><td class="num">${fmtIsk(i.orders_30d)}</td>
       <td>${sparkline(i.spark)}</td>
-    </tr>`).join("") : `<tr><td colspan="13" class="loading">No items match.</td></tr>`;
+    </tr>`).join("") : `<tr><td colspan="15" class="loading">No items match.</td></tr>`;
   document.querySelectorAll("#tbl tbody tr[data-id]").forEach(tr => tr.addEventListener("click", () => select(+tr.dataset.id)));
 }
 
@@ -74,6 +74,29 @@ async function select(typeId) {
   const key = currentMarket() + ":" + typeId;
   historyCache[key] ||= await getJSON(`/api/history/${typeId}?market=${encodeURIComponent(currentMarket())}`);
   if (state.selected === typeId) renderDetail();
+  stationCache[key] ||= await getJSON(`/api/station/${typeId}?market=${encodeURIComponent(currentMarket())}`);
+  if (state.selected === typeId) renderStation(stationCache[key]);
+}
+
+let stationChart, stationCache = {};
+function renderStation(s) {
+  document.getElementById("station-title").textContent = `Station order book: ${s.station}`;
+  document.getElementById("station-note").textContent = s.times.length < 2
+    ? `${s.times.length} snapshot so far; the hourly task adds one every hour`
+    : `${s.times.length} hourly snapshots`;
+  stationChart?.destroy();
+  const up = css("--up"), down = css("--down"), accent = css("--accent");
+  stationChart = new Chart(document.getElementById("station-chart"), {
+    type: "line",
+    data: { labels: s.times, datasets: [
+      { label: "Ask (best 5%)", data: s.ask, borderColor: down, borderWidth: 1.2, pointRadius: s.times.length < 30 ? 3 : 0, stepped: true },
+      { label: "Mid", data: s.mid, borderColor: accent, borderWidth: 2, pointRadius: s.times.length < 30 ? 3 : 0 },
+      { label: "Bid (best 5%)", data: s.bid, borderColor: up, borderWidth: 1.2, pointRadius: s.times.length < 30 ? 3 : 0, stepped: true },
+    ] },
+    options: { maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
+      plugins: { legend: { labels: { font: { size: 11 } } }, tooltip: { callbacks: { label: c => `${c.dataset.label}: ${fmtIsk(c.raw)}` } } },
+      scales: { x: { ticks: { maxTicksLimit: 6, font: { size: 10 } } }, y: { ticks: { callback: fmtIsk, font: { size: 10 } } } } },
+  });
 }
 
 function renderDetail() {
@@ -107,7 +130,7 @@ function renderDetail() {
 function renderAll() { renderTable(); renderOverview(); }
 
 async function loadMarket() {
-  document.querySelector("#tbl tbody").innerHTML = `<tr><td colspan="13" class="loading">Loading…</td></tr>`;
+  document.querySelector("#tbl tbody").innerHTML = `<tr><td colspan="15" class="loading">Loading…</td></tr>`;
   items = await loadItems();
   const m = document.getElementById("market"), label = m ? m.options[m.selectedIndex].text : currentMarket();
   const latest = items.map(i => i.date).sort().pop();
