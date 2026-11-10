@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}About · EVE Market Predictor{% endblock %}
+{% block title %}About Â· EVE Market Predictor{% endblock %}
 {% block content %}
 <div class="prose">
 <h1>About the predictions</h1>
@@ -23,7 +23,7 @@
     <tr><td><code>/markets/{region}/orders</code></td><td>A snapshot of the live order book each time you collect: best bid, best ask, and total volume on each side at Jita 4-4.</td></tr>
   </tbody>
 </table>
-<p>Items trade in The Forge (Jita). PLEX is the exception: it moved to its own global market (region <code>{{ region_overrides['PLEX'] }}</code>), so current data is fetched from there and its order snapshot covers the whole market rather than one station. Its older Jita history is kept too; if both markets have a row for the same day, the one with more volume is used. Items only have history from their release (for example, today's PLEX and skill injectors date from 2016�2017).</p>
+<p>Items trade in The Forge (Jita). PLEX is the exception: it moved to its own global market (region <code>{{ region_overrides['PLEX'] }}</code>), so current data is fetched from there and its order snapshot covers the whole market rather than one station. Its older Jita history is kept too; if both markets have a row for the same day, the one with more volume is used. Items only have history from their release (for example, today's PLEX and skill injectors date from 2016–2017).</p>
 <p>Data is stored in a local SQLite file, <code>data/market.db</code>. Collecting again updates history in place and appends a new order snapshot, so running it daily builds a bid/ask history that ESI doesn't keep for you.</p>
 
 <h2>What the model predicts</h2>
@@ -32,7 +32,7 @@
 <table>
   <thead><tr><th>Feature</th><th>Meaning</th></tr></thead>
   <tbody>
-    <tr><td><code>ret_1 … ret_30</code></td><td>Log return over the past 1, 3, 7, 14 and 30 days</td></tr>
+    <tr><td><code>ret_1 â€¦ ret_30</code></td><td>Log return over the past 1, 3, 7, 14 and 30 days</td></tr>
     <tr><td><code>vol_7</code>, <code>vol_30</code></td><td>Standard deviation of daily returns over 7 and 30 days (volatility)</td></tr>
     <tr><td><code>ma_ratio_7</code>, <code>ma_ratio_30</code></td><td>How far today's price sits above or below its 7- and 30-day moving average</td></tr>
     <tr><td><code>range_pct</code></td><td>Today's high minus low, as a fraction of the average price</td></tr>
@@ -52,7 +52,7 @@
     <tr><td><b>Gradient boosting</b></td><td>scikit-learn's <code>HistGradientBoostingRegressor</code> (300 trees, learning rate 0.05, 15 leaves, min 50 samples per leaf). Can capture non-linear effects but needs more data to pay off.</td></tr>
   </tbody>
 </table>
-<p>The shaded forecast range on the Predictions page is ±1 standard deviation of the expected <i>h</i>-day move, estimated as the item's 30-day volatility × √<i>h</i>. It's a rough guide to typical noise, not a guaranteed interval.</p>
+<p>The shaded forecast range on the Predictions page is Â±1 standard deviation of the expected <i>h</i>-day move, estimated as the item's 30-day volatility Ã— âˆš<i>h</i>. It's a rough guide to typical noise, not a guaranteed interval.</p>
 
 <h2>How the models are evaluated</h2>
 <p>A <b>walk-forward backtest</b> mimics using the model in real time. The last 105 days are split into five 21-day test windows. For each window the model is trained only on data that ended <i>h</i> days before the window starts (so no training target overlaps the test period), then scored on that window.</p>
