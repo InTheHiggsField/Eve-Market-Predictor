@@ -26,8 +26,8 @@ function renderSummary() {
   const sel = rows.find(r => r.model === state.model), v = document.getElementById("verdict");
   v.hidden = false;
   v.innerHTML = sel.mae < base
-    ? `<b>${MODEL_LABEL[state.model]}</b> beats the no-change baseline on this list (error ${fmtPct((sel.mae / base - 1) * 100)}, direction right ${(sel.direction_acc * 100).toFixed(0)}% of the time). Treat forecasts as a weak signal, not a sure thing: the backtest ignores broker fees and sales tax.`
-    : `<b>${MODEL_LABEL[state.model]}</b> does <b>not</b> beat simply assuming prices stay flat on this list (error ${fmtPct((sel.mae / base - 1) * 100)} vs. no change). Forecasts below are shown for exploration; don't trade on them.` +
+    ? `<b>${MODEL_LABEL[state.model]}</b> in ${esc(data.market)} beats the no-change baseline on this list (error ${fmtPct((sel.mae / base - 1) * 100)}, direction right ${(sel.direction_acc * 100).toFixed(0)}% of the time). Treat forecasts as a weak signal, not a sure thing: the backtest ignores broker fees and sales tax.`
+    : `<b>${MODEL_LABEL[state.model]}</b> in ${esc(data.market)} does <b>not</b> beat simply assuming prices stay flat on this list (error ${fmtPct((sel.mae / base - 1) * 100)} vs. no change). Forecasts below are shown for exploration; don't trade on them.` +
       (best && best.mae < base ? ` ${MODEL_LABEL[best.model]} does slightly better here.` : "");
 }
 
@@ -102,7 +102,7 @@ async function load() {
   document.querySelector("#summary").innerHTML = `<tbody><tr><td class="loading">Training models… (a few seconds)</td></tr></tbody>`;
   document.getElementById("cards").style.opacity = .4;
   try {
-    const d = await getJSON(`/api/predictions?list=${state.list}&model=${state.model}&horizon=${state.horizon}`);
+    const d = await getJSON(`/api/predictions?market=${encodeURIComponent(currentMarket())}&list=${state.list}&model=${state.model}&horizon=${state.horizon}`);
     if (my !== reqId) return;
     data = d;
     const sel = document.getElementById("group"), groups = [...new Set(data.items.map(i => i.group))];
@@ -115,5 +115,6 @@ async function load() {
 }
 
 seg("list-seg", "list"); seg("model-seg", "model"); seg("horizon-seg", "horizon");
+initMarketPicker(load);
 document.getElementById("group").addEventListener("change", e => { state.group = e.target.value; renderRank(); renderCards(); });
 load();

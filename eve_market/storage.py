@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS order_snapshots (
     best_bid REAL, best_ask REAL,
     bid_volume INTEGER, ask_volume INTEGER,
     bid_orders INTEGER, ask_orders INTEGER,
-    PRIMARY KEY (taken_at, region_id, type_id)
+    PRIMARY KEY (taken_at, region_id, location_id, type_id)
 );
 CREATE TABLE IF NOT EXISTS types (
     type_id INTEGER PRIMARY KEY,
@@ -38,8 +38,22 @@ def connect(db_path: Path | str = DEFAULT_DB) -> sqlite3.Connection:
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
+    _migrate(conn)
     conn.executescript(SCHEMA)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Older databases keyed order snapshots without location_id (one hub only). Rebuild that
+    table so snapshots from several hub stations in one region can coexist."""
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'order_snapshots'").fetchone()
+    if row and "location_id, type_id)" not in row[0]:
+        conn.executescript("""
+            ALTER TABLE order_snapshots RENAME TO order_snapshots_old;
+        """ + SCHEMA + """
+            INSERT INTO order_snapshots SELECT * FROM order_snapshots_old;
+            DROP TABLE order_snapshots_old;
+        """)
 
 
 def upsert_history(conn: sqlite3.Connection, region_id: int, type_id: int, rows: list[dict]) -> int:
@@ -67,16 +81,20 @@ def save_type_names(conn: sqlite3.Connection, items: dict[str, int]) -> None:
     conn.commit()
 
 
-def read_history(conn: sqlite3.Connection, type_ids: list[int]) -> pd.DataFrame:
-    """History for the given types, whichever region each was collected from.
+def read_history(conn: sqlite3.Connection, type_ids: list[int], region_id: int,
+                 extra_regions: tuple[int, ...] = ()) -> pd.DataFrame:
+    """History for the given types in one hub's region.
 
-    If an item has rows from two regions on the same day (PLEX around its move from Jita to
-    the global market), the row with the larger traded volume wins."""
+    `extra_regions` adds markets that span regions (the global PLEX market). If an item has rows
+    from two regions on the same day (PLEX around its move to the global market), the row with
+    the larger traded volume wins."""
     marks = ",".join("?" * len(type_ids))
+    regions = (region_id, *extra_regions)
     df = pd.read_sql_query(
         f"SELECT h.*, t.name FROM history h LEFT JOIN types t USING (type_id) "
-        f"WHERE h.type_id IN ({marks}) ORDER BY type_id, date, volume DESC",
-        conn, params=tuple(type_ids),
+        f"WHERE h.type_id IN ({marks}) AND h.region_id IN ({','.join('?' * len(regions))}) "
+        f"ORDER BY type_id, date, volume DESC",
+        conn, params=(*type_ids, *regions),
     )
     df = df.drop_duplicates(["type_id", "date"], keep="first").reset_index(drop=True)
     df["date"] = pd.to_datetime(df["date"])

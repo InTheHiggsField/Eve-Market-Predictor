@@ -18,7 +18,7 @@ from datetime import date
 import requests
 
 from . import storage
-from .esi import THE_FORGE, USER_AGENT
+from .esi import USER_AGENT
 
 log = logging.getLogger(__name__)
 ROOT_INDEX = "https://data.everef.net/market-history/index.json"
@@ -53,10 +53,10 @@ def list_files(session: requests.Session, start: str, end: str) -> list[dict]:
     return sorted(files, key=lambda f: f["date"])
 
 
-def _wanted_key(items: dict[str, int], region_overrides: dict[str, int], default_region: int) -> set[tuple[int, int]]:
+def _wanted_key(items: dict[str, int], region_overrides: dict[str, int], regions: list[int]) -> set[tuple[int, int]]:
     """(region_id, type_id) pairs to keep. Override items are kept from both their own region and the
-    default one, because PLEX traded in Jita before it moved to the global market."""
-    keep = {(default_region, t) for t in items.values()}
+    hub regions, because PLEX traded at regional hubs before it moved to the global market."""
+    keep = {(r, t) for r in regions for t in items.values()}
     keep |= {(r, items[n]) for n, r in region_overrides.items() if n in items}
     return keep
 
@@ -80,10 +80,10 @@ def fetch_and_trim(session: requests.Session, url: str, keep: set[tuple[int, int
     return out
 
 
-def backfill(items: dict[str, int], region_overrides: dict[str, int], start: str = "2003-10-01",
+def backfill(items: dict[str, int], region_overrides: dict[str, int], regions: list[int], start: str = "2003-10-01",
              end: str | None = None, db_path=storage.DEFAULT_DB, workers: int = 4, force: bool = False) -> None:
     end = end or date.today().isoformat()
-    keep = _wanted_key(items, region_overrides, THE_FORGE)
+    keep = _wanted_key(items, region_overrides, regions)
     item_set = hashlib.sha1(repr(sorted(keep)).encode()).hexdigest()[:12]
     conn = storage.connect(db_path)
     conn.executescript(LOG_SCHEMA)

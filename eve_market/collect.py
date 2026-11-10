@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-from .esi import ESIClient, JITA_4_4, THE_FORGE
+from .esi import ESIClient
 from . import storage
 
 log = logging.getLogger(__name__)
@@ -25,31 +26,46 @@ def summarize_orders(orders: list[dict], location_id: int | None) -> dict:
     }
 
 
-def collect(items: dict[str, int], region_id: int = THE_FORGE, location_id: int | None = JITA_4_4,
-            region_overrides: dict[str, int] | None = None, db_path=storage.DEFAULT_DB,
-            snapshots: bool = True, client: ESIClient | None = None) -> None:
-    """Fetch history (and optionally an order snapshot) for each `{name: type_id}` item.
+def collect(items: dict[str, int], markets: dict[str, dict], region_overrides: dict[str, int] | None = None,
+            db_path=storage.DEFAULT_DB, snapshots: bool = True, client: ESIClient | None = None,
+            workers: int = 6) -> None:
+    """Fetch history and order snapshots for every `{name: type_id}` item at every hub in `markets`.
 
-    Items listed in `region_overrides` (e.g. PLEX on its global market) are fetched from that
-    region, and their order snapshot covers the whole region instead of one station.
+    History is per region, so each (region, item) pair is fetched once. Items in `region_overrides`
+    (PLEX on its global market) have one history for all hubs; their order book is still split
+    by hub station, since global-market orders carry the station they were placed at.
     """
     client = client or ESIClient()
     region_overrides = region_overrides or {}
     conn = storage.connect(db_path)
     storage.save_type_names(conn, items)
     taken_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    for i, (name, type_id) in enumerate(items.items(), 1):
-        region = region_overrides.get(name, region_id)
-        location = None if name in region_overrides else location_id
-        try:
-            n = storage.upsert_history(conn, region, type_id, client.market_history(type_id, region))
-            msg = f"[{i}/{len(items)}] {name} ({type_id}): {n} history rows"
-            if snapshots:
-                summary = summarize_orders(client.market_orders(type_id, region), location)
-                storage.insert_snapshot(conn, {"taken_at": taken_at, "region_id": region,
-                                               "location_id": location, "type_id": type_id, **summary})
-                msg += f", bid {summary['best_bid']} / ask {summary['best_ask']}"
-            log.info(msg)
-        except Exception as exc:  # keep going; one bad type shouldn't kill the run
-            log.warning("%s (%s) failed: %s", name, type_id, exc)
+
+    # (region, type) -> stations whose snapshot comes from that region's order book
+    jobs: dict[tuple[int, int], list[int]] = {}
+    names = {t: n for n, t in items.items()}
+    for m in markets.values():
+        for name, type_id in items.items():
+            region = region_overrides.get(name, m["region_id"])
+            jobs.setdefault((region, type_id), []).append(m["station_id"])
+
+    def fetch(job):
+        region, type_id = job
+        hist = client.market_history(type_id, region)
+        orders = client.market_orders(type_id, region) if snapshots else []
+        return job, hist, orders
+
+    with ThreadPoolExecutor(workers) as pool:
+        futures = [pool.submit(fetch, j) for j in jobs]
+        for i, fut in enumerate(as_completed(futures), 1):
+            try:
+                (region, type_id), hist, orders = fut.result()
+            except Exception as exc:  # keep going; one bad request shouldn't kill the run
+                log.warning("fetch failed: %s", exc)
+                continue
+            n = storage.upsert_history(conn, region, type_id, hist)
+            for station in jobs[(region, type_id)] if snapshots else []:
+                storage.insert_snapshot(conn, {"taken_at": taken_at, "region_id": region, "location_id": station,
+                                               "type_id": type_id, **summarize_orders(orders, station)})
+            log.info("[%d/%d] %s in region %s: %d history rows", i, len(jobs), names[type_id], region, n)
     conn.close()

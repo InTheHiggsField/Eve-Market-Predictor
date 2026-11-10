@@ -4,8 +4,6 @@
 """
 from __future__ import annotations
 
-import sqlite3
-import sys
 import threading
 from contextlib import closing
 from functools import lru_cache
@@ -16,10 +14,8 @@ import pandas as pd
 from flask import Flask, abort, jsonify, render_template, request
 
 from .. import storage
+from ..config import DEFAULT_MARKET, ITEM_GROUPS, ITEM_LISTS, MARKETS, REGION_OVERRIDES, load_history
 from ..forecast import FEATURES, backtest, build_features, make_models
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from data_sets.tracked_items import ITEM_GROUPS, ITEM_LISTS, REGION_OVERRIDES  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 LIST_OF = {name: lst for lst in ("core", "commodities") for name in ITEM_LISTS[lst]}
@@ -32,38 +28,47 @@ def create_app(db_path: str | Path = storage.DEFAULT_DB) -> Flask:
     def conn():
         return closing(storage.connect(db_path))
 
-    def history(list_name: str) -> pd.DataFrame:
+    def market_arg() -> str:
+        m = request.args.get("market", DEFAULT_MARKET)
+        if m not in MARKETS:
+            abort(400, f"unknown market {m}")
+        return m
+
+    def history(list_name: str, market: str) -> pd.DataFrame:
         if list_name not in ITEM_LISTS:
             abort(400, f"unknown list {list_name}")
         with conn() as c:
-            return storage.read_history(c, list(ITEM_LISTS[list_name].values()))
+            return load_history(c, list_name, market)
 
-    def latest_snapshots() -> pd.DataFrame:
+    def latest_snapshots(market: str) -> pd.DataFrame:
+        """Most recent order snapshot of each item at this hub's station."""
         with conn() as c:
             return pd.read_sql_query(
                 "SELECT s.* FROM order_snapshots s JOIN (SELECT type_id, MAX(taken_at) t FROM order_snapshots "
-                "GROUP BY type_id) m ON s.type_id = m.type_id AND s.taken_at = m.t", c)
+                "WHERE location_id = ? GROUP BY type_id) m ON s.type_id = m.type_id AND s.taken_at = m.t "
+                "WHERE s.location_id = ?", c, params=(MARKETS[market]["station_id"],) * 2)
 
     # ---------- pages ----------
     @app.get("/")
     def market_page():
-        return render_template("market.html", page="market")
+        return render_template("market.html", page="market", markets=MARKETS)
 
     @app.get("/predictions")
     def predictions_page():
-        return render_template("predictions.html", page="predictions")
+        return render_template("predictions.html", page="predictions", markets=MARKETS)
 
     @app.get("/about")
     def about_page():
-        return render_template("about.html", page="about", region_overrides=REGION_OVERRIDES,
+        return render_template("about.html", page="about", region_overrides=REGION_OVERRIDES, markets=MARKETS,
                                features=FEATURES, n_core=len(ITEM_LISTS["core"]),
                                n_commod=len(ITEM_LISTS["commodities"]))
 
     # ---------- API ----------
     @app.get("/api/items")
     def api_items():
-        h = history(request.args.get("list", "all"))
-        snaps = latest_snapshots().set_index("type_id")
+        market = market_arg()
+        h = history(request.args.get("list", "all"), market)
+        snaps = latest_snapshots(market).set_index("type_id")
         out = []
         for type_id, g in h.groupby("type_id"):
             g = g.sort_values("date")
@@ -96,7 +101,7 @@ def create_app(db_path: str | Path = storage.DEFAULT_DB) -> Flask:
 
     @app.get("/api/history/<int:type_id>")
     def api_history(type_id: int):
-        h = history("all")
+        h = history("all", market_arg())
         g = h[h["type_id"] == type_id].sort_values("date")
         if g.empty:
             abort(404)
@@ -108,6 +113,7 @@ def create_app(db_path: str | Path = storage.DEFAULT_DB) -> Flask:
 
     @app.get("/api/predictions")
     def api_predictions():
+        market = market_arg()
         list_name = request.args.get("list", "core")
         model = request.args.get("model", "ridge")
         horizon = int(request.args.get("horizon", 7))
@@ -116,7 +122,7 @@ def create_app(db_path: str | Path = storage.DEFAULT_DB) -> Flask:
         with conn() as c:  # cache is keyed on the latest data date so a new collect invalidates it
             stamp = c.execute("SELECT MAX(date) || COUNT(*) FROM history").fetchone()[0]
         with _lock:
-            return jsonify(_predictions(str(db_path), list_name, model, horizon, stamp))
+            return jsonify(_predictions(str(db_path), market, list_name, model, horizon, stamp))
 
     return app
 
@@ -125,10 +131,10 @@ def _num(x):
     return None if x is None or (isinstance(x, float) and np.isnan(x)) else float(x)
 
 
-@lru_cache(maxsize=16)
-def _predictions(db_path: str, list_name: str, model_name: str, horizon: int, _stamp: str) -> dict:
+@lru_cache(maxsize=32)
+def _predictions(db_path: str, market: str, list_name: str, model_name: str, horizon: int, _stamp: str) -> dict:
     with closing(storage.connect(db_path)) as c:
-        hist = storage.read_history(c, list(ITEM_LISTS[list_name].values()))
+        hist = load_history(c, list_name, market)
     feats = build_features(hist, horizon)
     metrics, oos = backtest(feats, horizon, return_predictions=True)
     summary = (metrics.groupby("model")[["mae", "direction_acc"]].mean()
@@ -162,7 +168,7 @@ def _predictions(db_path: str, list_name: str, model_name: str, horizon: int, _s
             "direction_acc": float(np.mean(np.sign(o[model_name]) == np.sign(o["target"]))) if len(o) else None,
         })
     return {
-        "list": list_name, "model": model_name, "horizon": horizon,
+        "market": market, "list": list_name, "model": model_name, "horizon": horizon,
         "summary": summary.replace({np.nan: None}).to_dict("records"),
         "folds": [{**rec, "fold_start": str(rec["fold_start"])} for rec in metrics.to_dict("records")],
         "items": items,

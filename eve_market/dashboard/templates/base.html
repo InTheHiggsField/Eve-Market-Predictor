@@ -9,9 +9,16 @@
   <script src="{{ url_for('static', filename='common.js') }}"></script>
 </head>
 <body>
-  <div class="ticker" aria-label="Market ticker"><div class="ticker-track" id="ticker"><span class="muted">Loading market…</span></div></div>
+  <div class="ticker" aria-label="Market ticker"><span class="ticker-label" id="ticker-label"></span><div class="ticker-wrap"><div class="ticker-track" id="ticker"><span class="muted">Loading market…</span></div></div></div>
   <header class="topbar">
     <div class="brand"><span class="logo">◈</span> EVE Market Predictor</div>
+    {% if markets and page != 'about' %}
+    <label class="market-pick">Market
+      <select id="market" aria-label="Regional market">
+        {% for name, m in markets.items() %}<option value="{{ name }}">{{ name }} ({{ m.region }})</option>{% endfor %}
+      </select>
+    </label>
+    {% endif %}
     <nav>
       <a href="/" class="{{ 'active' if page == 'market' }}">Market data</a>
       <a href="/predictions" class="{{ 'active' if page == 'predictions' }}">Predictions</a>

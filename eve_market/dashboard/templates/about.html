@@ -13,6 +13,14 @@
 </ul>
 <p>Items were chosen by average ISK traded per day over 90 days, keeping items that also have enough individual trades per day for prices to be meaningful. The seven specialty minerals are the exception: they're included for completeness but trade only a handful of times a day, so their forecasts are very noisy.</p>
 
+<h2>Trade hubs</h2>
+<p>The same items are tracked at each major high-sec trade hub, defined in <code>data_sets/markets.py</code>. Use the <b>Market</b> picker at the top of the Market data and Predictions pages to switch between them.</p>
+<table>
+  <thead><tr><th>Hub</th><th>Region (price history)</th><th>Station (bid/ask snapshots)</th></tr></thead>
+  <tbody>{% for name, m in markets.items() %}<tr><td><b>{{ name }}</b></td><td>{{ m.region }}</td><td>{{ m.station }}</td></tr>{% endfor %}</tbody>
+</table>
+<p>ESI only keeps price history per <i>region</i>, so a hub's charts and forecasts reflect every trade in its region; most of that volume happens at the hub station itself. Order-book snapshots are filtered to the hub station. PLEX trades on one global market, so its price history is the same at every hub, but its bid/ask is still taken at each hub's station. Each hub gets its own model, trained only on that hub's history.</p>
+
 <h2>Where the data comes from</h2>
 <p>Everything comes from EVE's public <a href="https://developers.eveonline.com/api-explorer" target="_blank" rel="noopener">ESI API</a>; no login is needed.</p>
 <table>
@@ -20,10 +28,10 @@
   <tbody>
     <tr><td><code>/markets/{region}/history</code></td><td>One row per item per day: average, highest and lowest trade price, units traded, number of trades. ESI serves about 13 months.</td></tr>
     <tr><td><a href="https://data.everef.net/market-history/" target="_blank" rel="noopener">EVE Ref archive</a></td><td>Older daily history in the same format, archived from ESI back to 2003-10-01. <code>backfill</code> streams each day's file, keeps only the tracked items, and stores them; nothing else is saved to disk.</td></tr>
-    <tr><td><code>/markets/{region}/orders</code></td><td>A snapshot of the live order book each time you collect: best bid, best ask, and total volume on each side at Jita 4-4.</td></tr>
+    <tr><td><code>/markets/{region}/orders</code></td><td>A snapshot of the live order book each time you collect: best bid, best ask, and total volume on each side at each hub station.</td></tr>
   </tbody>
 </table>
-<p>Items trade in The Forge (Jita). PLEX is the exception: it moved to its own global market (region <code>{{ region_overrides['PLEX'] }}</code>), so current data is fetched from there and its order snapshot covers the whole market rather than one station. Its older Jita history is kept too; if both markets have a row for the same day, the one with more volume is used. Items only have history from their release (for example, today's PLEX and skill injectors date from 2016–2017).</p>
+<p>Items are fetched from each hub's region. PLEX is the exception: it moved to its own global market (region <code>{{ region_overrides['PLEX'] }}</code>), so current data is fetched from there and its order snapshot covers the whole market rather than one station. Its older Jita history is kept too; if both markets have a row for the same day, the one with more volume is used. Items only have history from their release (for example, today's PLEX and skill injectors date from 2016–2017).</p>
 <p>Data is stored in a local SQLite file, <code>data/market.db</code>. Collecting again updates history in place and appends a new order snapshot, so running it daily builds a bid/ask history that ESI doesn't keep for you.</p>
 
 <h2>What the model predicts</h2>
@@ -80,10 +88,10 @@ pip install -r requirements.txt
 
 python -m eve_market collect                    # both lists, ~30 seconds
 python -m eve_market backfill                   # one-off: history back to 2003 (several GB streamed; re-run to resume)
-python -m eve_market backtest --list commodities
+python -m eve_market backtest --list commodities --market Amarr
 python -m eve_market forecast --list core --model ridge --out data/forecast.csv
 python -m eve_market dashboard                  # this site, at http://127.0.0.1:5000</code></pre>
-<p>Options: <code>--list core|commodities|all</code>, <code>--horizon N</code>, <code>--model ridge|gbm</code>, and for the dashboard <code>--port</code>. To keep data current, schedule <code>python -m eve_market collect</code> once a day (ESI history updates shortly after downtime, 11:00 UTC). Refresh this page after collecting; predictions retrain automatically when new data arrives.</p>
+<p>Options: <code>--market Jita|Amarr|Dodixie|Hek|Rens</code> (collect and backfill take several, default all), <code>--list core|commodities|all</code>, <code>--horizon N</code>, <code>--model ridge|gbm</code>, and for the dashboard <code>--port</code>. To keep data current, schedule <code>python -m eve_market collect</code> once a day (ESI history updates shortly after downtime, 11:00 UTC). Refresh this page after collecting; predictions retrain automatically when new data arrives.</p>
 <p>To track a different item, add its name and <code>type_id</code> to one of the dictionaries in <code>data_sets/tracked_items.py</code> (and a display group in <code>ITEM_GROUPS</code>), then collect again. Type IDs can be looked up in <code>data_sets/invTypes_clean.csv</code>.</p>
 
 <h2>Code layout</h2>

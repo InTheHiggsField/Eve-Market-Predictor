@@ -51,7 +51,7 @@ def test_storage_roundtrip(tmp_path):
                                           "lowest": 3.9, "volume": 10, "order_count": 2}])
     storage.upsert_history(conn, 1, 34, [{"date": "2026-01-01", "average": 5.0, "highest": 5.1,
                                           "lowest": 4.9, "volume": 10, "order_count": 2}])
-    df = storage.read_history(conn, [34])
+    df = storage.read_history(conn, [34], 1)
     assert len(df) == 1 and df.loc[0, "average"] == 5.0
 
 
@@ -93,7 +93,7 @@ def test_backfill_trims_to_tracked_items():
     class FakeSession:
         def get(self, url, timeout): return FakeResp()
 
-    keep = _wanted_key({"Tritanium": 34, "PLEX": 44992}, {"PLEX": 19000001}, 10000002)
+    keep = _wanted_key({"Tritanium": 34, "PLEX": 44992}, {"PLEX": 19000001}, [10000002])
     rows = fetch_and_trim(FakeSession(), "x", keep)
     assert sorted((r[0], r[1]) for r in rows) == [(10000002, 34), (19000001, 44992)]
 
@@ -103,5 +103,31 @@ def test_read_history_prefers_higher_volume_region(tmp_path):
     base = {"date": "2025-01-01", "average": 1.0, "highest": 1.0, "lowest": 1.0, "order_count": 1}
     storage.upsert_history(conn, 10000002, 44992, [{**base, "volume": 5}])
     storage.upsert_history(conn, 19000001, 44992, [{**base, "average": 2.0, "volume": 50}])
-    df = storage.read_history(conn, [44992])
+    df = storage.read_history(conn, [44992], 10000002, (19000001,))
     assert len(df) == 1 and df.loc[0, "region_id"] == 19000001
+
+
+def test_history_is_split_by_market(tmp_path):
+    conn = storage.connect(tmp_path / "m.db")
+    base = {"date": "2025-01-01", "highest": 1.0, "lowest": 1.0, "volume": 5, "order_count": 1}
+    storage.upsert_history(conn, 10000002, 34, [{**base, "average": 4.0}])   # Jita
+    storage.upsert_history(conn, 10000043, 34, [{**base, "average": 4.5}])   # Amarr
+    storage.upsert_history(conn, 19000001, 44992, [{**base, "average": 5e6}])  # global PLEX
+    amarr = storage.read_history(conn, [34, 44992], 10000043, (19000001,))
+    assert sorted(amarr["average"]) == [4.5, 5e6]
+
+
+def test_snapshot_migration_keeps_rows(tmp_path):
+    import sqlite3
+    db = tmp_path / "old.db"
+    c = sqlite3.connect(db)
+    c.execute("CREATE TABLE order_snapshots (taken_at TEXT NOT NULL, region_id INTEGER NOT NULL, location_id INTEGER, "
+              "type_id INTEGER NOT NULL, best_bid REAL, best_ask REAL, bid_volume INTEGER, ask_volume INTEGER, "
+              "bid_orders INTEGER, ask_orders INTEGER, PRIMARY KEY (taken_at, region_id, type_id))")
+    c.execute("INSERT INTO order_snapshots VALUES ('t', 1, 60003760, 34, 1, 2, 3, 4, 5, 6)")
+    c.commit(); c.close()
+    conn = storage.connect(db)
+    storage.insert_snapshot(conn, {"taken_at": "t", "region_id": 1, "location_id": 60008494, "type_id": 34,
+                                   "best_bid": 1, "best_ask": 2, "bid_volume": 0, "ask_volume": 0,
+                                   "bid_orders": 0, "ask_orders": 0})
+    assert conn.execute("SELECT COUNT(*) FROM order_snapshots").fetchone()[0] == 2

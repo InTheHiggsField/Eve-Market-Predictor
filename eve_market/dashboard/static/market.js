@@ -71,12 +71,13 @@ async function select(typeId) {
   document.getElementById("detail-stats").innerHTML =
     `<span>Avg <b>${fmtIsk(item.price)}</b></span><span>7d <b class="${pctClass(item.chg_7d)}">${fmtPct(item.chg_7d)}</b></span>` +
     `<span>Bid/ask <b>${fmtIsk(item.best_bid)} / ${fmtIsk(item.best_ask)}</b></span><span>ISK/day <b>${fmtIsk(item.isk_30d)}</b></span>`;
-  historyCache[typeId] ||= await getJSON(`/api/history/${typeId}`);
-  renderDetail();
+  const key = currentMarket() + ":" + typeId;
+  historyCache[key] ||= await getJSON(`/api/history/${typeId}?market=${encodeURIComponent(currentMarket())}`);
+  if (state.selected === typeId) renderDetail();
 }
 
 function renderDetail() {
-  const h = historyCache[state.selected];
+  const h = historyCache[currentMarket() + ":" + state.selected];
   if (!h) return;
   const n = Math.min(state.range, h.dates.length), s = h.dates.length - n, sl = a => a.slice(s);
   detailChart?.destroy();
@@ -105,12 +106,23 @@ function renderDetail() {
 
 function renderAll() { renderTable(); renderOverview(); }
 
+async function loadMarket() {
+  document.querySelector("#tbl tbody").innerHTML = `<tr><td colspan="13" class="loading">Loading…</td></tr>`;
+  items = await loadItems();
+  const m = document.getElementById("market"), label = m ? m.options[m.selectedIndex].text : currentMarket();
+  const latest = items.map(i => i.date).sort().pop();
+  document.getElementById("asof").textContent =
+    `${label}: daily history for the whole region, bid/ask at the hub station. PLEX comes from the global PLEX market. Latest day: ${latest}. ${items.length} items.`;
+  const keep = items.find(i => i.type_id === state.selected);
+  renderAll();
+  select(keep ? keep.type_id : items.slice().sort((a, b) => b.isk_30d - a.isk_30d)[0].type_id);
+}
+
 (async () => {
+  initMarketPicker(loadMarket);
   items = await loadItems();
   const groups = [...new Set(items.map(i => i.group))];
   document.getElementById("group").insertAdjacentHTML("beforeend", groups.map(g => `<option>${esc(g)}</option>`).join(""));
-  const latest = items.map(i => i.date).sort().pop();
-  document.getElementById("asof").textContent += ` Latest day: ${latest}. ${items.length} items.`;
   document.querySelectorAll("#tbl th[data-k]").forEach(th => th.addEventListener("click", () => {
     const k = th.dataset.k;
     state.sortDir = state.sortKey === k ? -state.sortDir : (k === "name" || k === "group" ? 1 : -1);
@@ -121,6 +133,5 @@ function renderAll() { renderTable(); renderOverview(); }
   seg("overview-seg", "overview", renderOverview);
   document.getElementById("group").addEventListener("change", e => { state.group = e.target.value; renderAll(); });
   document.getElementById("search").addEventListener("input", e => { state.q = e.target.value; renderAll(); });
-  renderAll();
-  select(items.slice().sort((a, b) => b.isk_30d - a.isk_30d)[0].type_id);
+  loadMarket();
 })();

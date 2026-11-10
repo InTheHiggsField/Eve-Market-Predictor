@@ -10,36 +10,31 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sys
-from pathlib import Path
 
 import pandas as pd
 
 from . import storage
 from .collect import collect
-from .esi import JITA_4_4, THE_FORGE
+from .config import DEFAULT_MARKET, ITEM_LISTS, MARKETS, REGION_OVERRIDES, load_history
 from .forecast import backtest, build_features, predict_latest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from data_sets.tracked_items import ITEM_LISTS, REGION_OVERRIDES  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="eve_market")
     p.add_argument("--db", default=str(storage.DEFAULT_DB))
-    p.add_argument("--region", type=int, default=THE_FORGE)
     sub = p.add_subparsers(dest="cmd", required=True)
 
     c = sub.add_parser("collect")
     c.add_argument("--list", choices=ITEM_LISTS, default="all", help="which item list to collect (default: all)")
     c.add_argument("--no-snapshots", action="store_true", help="skip live order-book snapshots")
-    c.add_argument("--location", type=int, default=JITA_4_4, help="station for order snapshots (default Jita 4-4)")
+    c.add_argument("--market", nargs="+", choices=MARKETS, default=list(MARKETS), help="hubs to collect (default: all)")
 
     for name in ("backtest", "forecast"):
         s = sub.add_parser(name)
         s.add_argument("--horizon", type=int, default=7, help="days ahead to forecast")
         s.add_argument("--list", choices=ITEM_LISTS, default="core",
                        help="core = PLEX/injectors/ships, commodities = minerals/ore/components")
+        s.add_argument("--market", choices=MARKETS, default=DEFAULT_MARKET, help="trade hub (default: Jita)")
     sub.choices["forecast"].add_argument("--model", choices=["gbm", "ridge"], default="gbm")
     sub.choices["forecast"].add_argument("--out", help="write predictions to this CSV")
 
@@ -48,6 +43,7 @@ def main(argv: list[str] | None = None) -> None:
     b.add_argument("--start", default="2003-10-01", help="first day (YYYY-MM-DD), default: earliest available")
     b.add_argument("--end", help="last day (default: today)")
     b.add_argument("--workers", type=int, default=4, help="parallel downloads")
+    b.add_argument("--market", nargs="+", choices=MARKETS, default=list(MARKETS), help="hubs to backfill (default: all)")
     b.add_argument("--force", action="store_true", help="re-fetch days already backfilled")
 
     d = sub.add_parser("dashboard", help="serve the local dashboard")
@@ -59,12 +55,12 @@ def main(argv: list[str] | None = None) -> None:
     pd.set_option("display.width", 160, "display.max_rows", 200)
 
     if args.cmd == "collect":
-        collect(ITEM_LISTS[args.list], args.region, args.location, REGION_OVERRIDES, args.db, not args.no_snapshots)
+        collect(ITEM_LISTS[args.list], {m: MARKETS[m] for m in args.market}, REGION_OVERRIDES, args.db, not args.no_snapshots)
         return
 
     if args.cmd == "backfill":
         from .backfill import backfill
-        backfill(ITEM_LISTS[args.list], REGION_OVERRIDES, args.start, args.end, args.db, args.workers, args.force)
+        backfill(ITEM_LISTS[args.list], REGION_OVERRIDES, [MARKETS[m]["region_id"] for m in args.market], args.start, args.end, args.db, args.workers, args.force)
         return
 
     if args.cmd == "dashboard":
@@ -74,7 +70,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     conn = storage.connect(args.db)
-    feats = build_features(storage.read_history(conn, list(ITEM_LISTS[args.list].values())), args.horizon)
+    feats = build_features(load_history(conn, args.list, args.market), args.horizon)
     if args.cmd == "backtest":
         res = backtest(feats, args.horizon)
         print(res.to_string(index=False))

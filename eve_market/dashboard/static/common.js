@@ -42,11 +42,34 @@ async function getJSON(url) {
   return r.json();
 }
 
+// Selected regional market: ?market= in the URL wins, then the last choice, then Jita.
+function currentMarket() {
+  const fromUrl = new URLSearchParams(location.search).get("market");
+  let saved = null;
+  try { saved = localStorage.getItem("market"); } catch (e) {}
+  return fromUrl || saved || "Jita";
+}
+function initMarketPicker(onChange) {
+  const sel = document.getElementById("market");
+  if (!sel) return;
+  const m = currentMarket();
+  sel.value = [...sel.options].some(o => o.value === m) ? m : "Jita";
+  sel.addEventListener("change", () => {
+    try { localStorage.setItem("market", sel.value); } catch (e) {}
+    const url = new URL(location.href); url.searchParams.set("market", sel.value);
+    history.replaceState(null, "", url);
+    _itemsPromise = null;
+    initTicker();
+    onChange && onChange(sel.value);
+  });
+}
+
 let _itemsPromise = null;
-function loadItems() { return _itemsPromise ||= getJSON("/api/items?list=all"); }
+function loadItems() { return _itemsPromise ||= getJSON(`/api/items?list=all&market=${encodeURIComponent(currentMarket())}`); }
 
 async function initTicker() {
   const el = document.getElementById("ticker");
+  document.getElementById("ticker-label").textContent = currentMarket();
   try {
     const items = await loadItems();
     const html = items.sort((a, b) => b.isk_30d - a.isk_30d).map(i =>

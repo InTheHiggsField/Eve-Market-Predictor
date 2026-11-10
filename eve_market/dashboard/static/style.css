@@ -31,13 +31,31 @@ a { color: var(--accent); }
 /* ticker */
 .ticker { overflow: hidden; background: var(--panel-2); border-bottom: 1px solid var(--border);
   height: 34px; display: flex; align-items: center; }
+.ticker-wrap { overflow: hidden; flex: 1; height: 100%; display: flex; align-items: center; }
+.ticker-label { flex: none; padding: 0 12px; height: 100%; display: flex; align-items: center; font-weight: 700;
+  font-size: 12px; letter-spacing: .5px; text-transform: uppercase; color: var(--accent); background: var(--panel);
+  border-right: 1px solid var(--border); }
+.market-pick { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; margin-left: auto; }
+.market-pick select { min-width: 190px; font-weight: 600; }
 .ticker-track { display: inline-flex; gap: 32px; white-space: nowrap; padding-left: 100%;
   animation: scroll var(--ticker-duration, 90s) linear infinite; font-variant-numeric: tabular-nums; }
-.ticker:hover .ticker-track { animation-play-state: paused; }
+.ticker:hover .ticker-wrap { overflow: hidden; flex: 1; height: 100%; display: flex; align-items: center; }
+.ticker-label { flex: none; padding: 0 12px; height: 100%; display: flex; align-items: center; font-weight: 700;
+  font-size: 12px; letter-spacing: .5px; text-transform: uppercase; color: var(--accent); background: var(--panel);
+  border-right: 1px solid var(--border); }
+.market-pick { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; margin-left: auto; }
+.market-pick select { min-width: 190px; font-weight: 600; }
+.ticker-track { animation-play-state: paused; }
 .ticker-item b { font-weight: 600; margin-right: 6px; }
 .ticker-item .chg { margin-left: 6px; }
 @keyframes scroll { from { transform: translateX(0); } to { transform: translateX(-100%); } }
-@media (prefers-reduced-motion: reduce) { .ticker-track { animation: none; padding-left: 16px; } .ticker { overflow-x: auto; } }
+@media (prefers-reduced-motion: reduce) { .ticker-wrap { overflow: hidden; flex: 1; height: 100%; display: flex; align-items: center; }
+.ticker-label { flex: none; padding: 0 12px; height: 100%; display: flex; align-items: center; font-weight: 700;
+  font-size: 12px; letter-spacing: .5px; text-transform: uppercase; color: var(--accent); background: var(--panel);
+  border-right: 1px solid var(--border); }
+.market-pick { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; margin-left: auto; }
+.market-pick select { min-width: 190px; font-weight: 600; }
+.ticker-track { animation: none; padding-left: 16px; } .ticker { overflow-x: auto; } }
 
 /* header */
 .topbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;

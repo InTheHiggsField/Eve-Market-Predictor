@@ -2,7 +2,7 @@
 {% block title %}Market data · EVE Market Predictor{% endblock %}
 {% block content %}
 <h1>Market data</h1>
-<p class="sub" id="asof">Daily history from ESI. PLEX from the global PLEX market, everything else from Jita.</p>
+<p class="sub" id="asof">Loading…</p>
 
 <div class="controls">
   <label>List
@@ -42,7 +42,7 @@
       <tbody><tr><td colspan="13" class="loading">Loading…</td></tr></tbody>
     </table>
   </div>
-  <p class="muted" style="margin:10px 0 0;font-size:12px">Volume, ISK/day and trades/day are 30-day averages. Bid/ask come from the latest order snapshot (Jita 4-4; region-wide for PLEX). Click a column to sort, click a row to chart it.</p>
+  <p class="muted" style="margin:10px 0 0;font-size:12px">Volume, ISK/day and trades/day are 30-day averages. Bid/ask come from the latest order snapshot at the selected hub's main station. Click a column to sort, click a row to chart it.</p>
 </div>
 {% endblock %}
 {% block scripts %}<script src="{{ url_for('static', filename='market.js') }}"></script>{% endblock %}

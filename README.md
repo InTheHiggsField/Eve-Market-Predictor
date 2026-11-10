@@ -20,10 +20,10 @@ python -m eve_market dashboard   # local website at http://127.0.0.1:5000
 The dashboard has three pages: **Market data** (ticker ribbon, sortable table, price/volume charts),
 **Predictions** (forecast graphs with past out-of-sample predictions and backtest scores), and **About**
 (how the data and models work and how to reproduce them).
-Options: `--list core|commodities|all` (collect defaults to all, backtest/forecast to core), `--horizon N` (days ahead), `--model gbm|ridge`,
-`--region` / `--location` (default The Forge / Jita 4-4), `--no-snapshots`.
+Options: `--market Jita Amarr Dodixie Hek Rens` (collect/backfill default to all hubs; backtest/forecast take one, default Jita), `--list core|commodities|all` (collect defaults to all, backtest/forecast to core), `--horizon N` (days ahead), `--model gbm|ridge`,
+`--no-snapshots`.
 
-The tracked items live in `data_sets/tracked_items.py` as `{"in-game name": type_id}` dictionaries: `TRACKED_ITEMS` (core: PLEX, injectors, ships) and `COMMODITY_ITEMS` (minerals, compressed ore, ship components). Only those are collected. PLEX is fetched from its global market (region 19000001), everything else from Jita. Data is stored in `data/market.db` (SQLite, git-ignored);
+The tracked items live in `data_sets/tracked_items.py` as `{"in-game name": type_id}` dictionaries: `TRACKED_ITEMS` (core: PLEX, injectors, ships) and `COMMODITY_ITEMS` (minerals, compressed ore, ship components). Only those are collected. Trade hubs live in `data_sets/markets.py` (Jita, Amarr, Dodixie, Hek, Rens): price history comes from each hub's region, bid/ask snapshots from its main station. PLEX history comes from its global market (region 19000001). Data is stored in `data/market.db` (SQLite, git-ignored);
 re-running `collect` upserts history and appends a new order snapshot, so run it daily (e.g. Task Scheduler)
 to build up bid/ask history that ESI does not keep for you.
 
