@@ -218,3 +218,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Collected market data (SQLite)
+data/
+
+# Local credentials and tokens (never commit)
+.env
+esi_token.json
+keys.json

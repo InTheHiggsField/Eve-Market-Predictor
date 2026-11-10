@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}About Â· EVE Market Predictor{% endblock %}
+{% block content %}
+<div class="prose">
+<h1>About</h1>
+<p class="sub">Written by Johnathan D. Shirley</p>
+<h1>About the predictions</h1>
+<p class="sub">How the data is collected, what the models do, how they're evaluated, and how to reproduce everything on your own machine.</p>
+
+<h2>What gets tracked</h2>
+<p>Only two hand-picked lists are collected, both defined in <code>data_sets/tracked_items.py</code> as <code>{"in-game name": type_id}</code> dictionaries:</p>
+<ul>
+  <li><b>Core</b> (<code>TRACKED_ITEMS</code>, {{ n_core }} items): PLEX, skill injectors and extractors, Logic Circuits, and the most-traded Marauders and pirate cruisers. These are the highest-value, highest-turnover items in the game.</li>
+  <li><b>Commodities</b> (<code>COMMODITY_ITEMS</code>, {{ n_commod }} items): all fifteen minerals, the most-traded compressed ores, and T2 and capital ship components.</li>
+</ul>
+<p>Items were chosen by average ISK traded per day over 90 days, keeping items that also have enough individual trades per day for prices to be meaningful. The seven specialty minerals are the exception: they're included for completeness but trade only a handful of times a day, so their forecasts are very noisy.</p>
+
+<h2>Trade hubs</h2>
+<p>The same items are tracked at the five major high-sec trade hubs and at Zarzakh, CCP's neutral null-sec hub, all defined in <code>data_sets/markets.py</code>. Use the <b>Market</b> picker at the top of the Market data and Predictions pages to switch between them.</p>
+<table>
+  <thead><tr><th>Hub</th><th>Region (price history)</th><th>Station (bid/ask snapshots)</th></tr></thead>
+  <tbody>{% for name, m in markets.items() %}<tr><td><b>{{ name }}</b></td><td>{{ m.region }}</td><td>{{ m.station }}</td></tr>{% endfor %}</tbody>
+</table>
+<p>ESI only keeps price history per <i>region</i>, so a hub's charts and forecasts reflect every trade in its region; most of that volume happens at the hub station itself. Order-book snapshots are filtered to the hub station. PLEX trades on one global market, so its price history is the same at every hub, but its bid/ask is still taken at each hub's station. Each hub gets its own model, trained only on that hub's history.</p>
+<p>Other low-sec and null-sec trading mostly happens in player citadels with private markets, which ESI only shows to characters allowed to dock there. Zarzakh is alone in its region, so its history really is the hub's own, but it is a thin market (24 of the tracked items trade there, since November 2023).</p>
+
+<h2>Where the data comes from</h2>
+<p>Everything comes from EVE's public <a href="https://developers.eveonline.com/api-explorer" target="_blank" rel="noopener">ESI API</a>; no login is needed.</p>
+<table>
+  <thead><tr><th>Endpoint</th><th>What we keep</th></tr></thead>
+  <tbody>
+    <tr><td><code>/markets/{region}/history</code></td><td>One row per item per day: average, highest and lowest trade price, units traded, number of trades. ESI serves about 13 months.</td></tr>
+    <tr><td><a href="https://data.everef.net/market-history/" target="_blank" rel="noopener">EVE Ref archive</a></td><td>Older daily history in the same format, archived from ESI back to 2003-10-01. <code>backfill</code> streams each day's file, keeps only the tracked items, and stores them; nothing else is saved to disk.</td></tr>
+    <tr><td><code>/markets/{region}/orders</code></td><td>A snapshot of the live order book each time you collect: best bid, best ask, and total volume on each side at each hub station.</td></tr>
+  </tbody>
+</table>
+<p>Items are fetched from each hub's region. PLEX is the exception: it moved to its own global market (region <code>{{ region_overrides['PLEX'] }}</code>), so current data is fetched from there and its order snapshot covers the whole market rather than one station. Its older Jita history is kept too; if both markets have a row for the same day, the one with more volume is used. Items only have history from their release (for example, today's PLEX and skill injectors date from 2016–2017).</p>
+<p>Data is stored in a local SQLite file, <code>data/market.db</code>. Collecting again updates history in place and appends a new order snapshot, so running it daily builds a bid/ask history that ESI doesn't keep for you.</p>
+
+<h2>Station prices</h2>
+<p>Players trade at a specific station, not "in a region", so the hub station's own price is what matters. ESI has no per-station history, so the tool builds one: a Windows scheduled task (<i>EVE Market Collect</i>) runs every hour and saves each hub station's order book.</p>
+<ul>
+  <li><b>Station mid</b> is halfway between the best 5% of buy volume and the best 5% of sell volume at the station, ignoring orders more than 20% from the best price. That's steadier than the single best order, which can be one bait unit or a huge lowball buy order.</li>
+  <li><b>Premium</b> is how far the station mid sits from the region's daily average. It's small in Jita (about 3%), where the station does nearly all the region's trading, and larger at the smaller hubs (up to about 11% in Rens).</li>
+  <li><b>Station forecast</b>: until there are {{ min_station_days }} days of hourly snapshots, the regional forecast's percentage move is applied to the current station mid. After that, a <b>station model</b> takes over. It uses the regional features above plus the station premium, the station's own 1/3/7-day returns and its spread, and predicts the station mid directly. The Predictions page says which one is in use.</li>
+</ul>
+
+<h2>What the model predicts</h2>
+<p>For each item and day <i>t</i>, the target is the <b>log return of the daily average price over the next <i>h</i> days</b>: <code>log(price[t+h] / price[t])</code>, with <i>h</i> = 7 by default. A log return of 0.05 is roughly a 5% rise. Days with no trades carry the last price forward with zero volume.</p>
+<p>Each day is described by these features, all computed only from data up to that day:</p>
+<table>
+  <thead><tr><th>Feature</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>ret_1 â€¦ ret_30</code></td><td>Log return over the past 1, 3, 7, 14 and 30 days</td></tr>
+    <tr><td><code>vol_7</code>, <code>vol_30</code></td><td>Standard deviation of daily returns over 7 and 30 days (volatility)</td></tr>
+    <tr><td><code>ma_ratio_7</code>, <code>ma_ratio_30</code></td><td>How far today's price sits above or below its 7- and 30-day moving average</td></tr>
+    <tr><td><code>range_pct</code></td><td>Today's high minus low, as a fraction of the average price</td></tr>
+    <tr><td><code>volume_z</code></td><td>Today's volume compared with its 30-day norm (z-score of log volume)</td></tr>
+    <tr><td><code>dow</code></td><td>Day of the week (weekend activity differs)</td></tr>
+  </tbody>
+</table>
+<p>One model is trained across all items in a list at once (a "pooled" model). That gives it far more examples than any single item has, at the cost of assuming items behave similarly once their features are scaled.</p>
+
+<h2>Models</h2>
+<table>
+  <thead><tr><th>Model</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td><b>No change</b> (baseline)</td><td>Always predicts a 0% move. Any useful model must beat this.</td></tr>
+    <tr><td><b>Momentum</b> (baseline)</td><td>Predicts the last <i>h</i> days' move will repeat.</td></tr>
+    <tr><td><b>Ridge regression</b></td><td>A linear model on standardized features with L2 regularization (<code>alpha=10</code>). Simple and hard to overfit; currently the most reliable.</td></tr>
+    <tr><td><b>Gradient boosting</b></td><td>scikit-learn's <code>HistGradientBoostingRegressor</code> (300 trees, learning rate 0.05, 15 leaves, min 50 samples per leaf). Can capture non-linear effects but needs more data to pay off.</td></tr>
+  </tbody>
+</table>
+<p>The shaded forecast range on the Predictions page is Â±1 standard deviation of the expected <i>h</i>-day move, estimated as the item's 30-day volatility Ã— âˆš<i>h</i>. It's a rough guide to typical noise, not a guaranteed interval.</p>
+
+<h2>How the models are evaluated</h2>
+<p>A <b>walk-forward backtest</b> mimics using the model in real time. The last 105 days are split into five 21-day test windows. For each window the model is trained only on data that ended <i>h</i> days before the window starts (so no training target overlaps the test period), then scored on that window.</p>
+<ul>
+  <li><b>MAE</b>: average absolute error of the predicted log return. Lower is better; compare it against "no change".</li>
+  <li><b>Direction</b>: how often the model got the sign of the move right, on days the price actually moved. 50% is a coin flip.</li>
+</ul>
+<p>The orange dots on each prediction chart are those out-of-sample backtest predictions, plotted on the date they were aiming at, so you can see how the model has tracked reality.</p>
+
+<h2>Authorship</h2>
+    <p>Code and Methodology written by Johnathan D. Shirley with the assistance of Anthropics Opus 5.5</p>
+<h2>Limitations</h2>
+<ul>
+  <li>On the core list (PLEX, injectors, ships) the models currently do <b>not</b> beat "no change". These markets are deep and efficient, and the features above don't capture what moves them (patch notes, PLEX sales, events).</li>
+  <li>On liquid commodities, Ridge beats the baseline modestly (about 4% lower error, ~60% direction accuracy).</li>
+  <li>The daily average mixes buy-order and sell-order fills, so part of any day-to-day "move" is just which side traded more. That flatters direction accuracy.</li>
+  <li>The backtest ignores broker fees, sales tax, and how much you could actually trade without moving the price.</li>
+  <li>Markets from a decade ago behaved differently (fewer players, different game mechanics), so old history adds examples but not always relevant ones.</li>
+</ul>
+<p>Nothing here is financial advice, in-game or otherwise.</p>
+
+<h2>How to replicate</h2>
+<p>On Windows, from the repository folder:</p>
+<pre><code>py -3.13 -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+
+python -m eve_market collect                    # both lists, ~30 seconds
+python -m eve_market backfill                   # one-off: history back to 2003 (several GB streamed; re-run to resume)
+python -m eve_market backtest --list commodities --market Amarr
+python -m eve_market forecast --list core --model ridge --out data/forecast.csv
+python -m eve_market dashboard                  # this site, at http://127.0.0.1:5000
+python -m eve_market backtest --station --market Jita   # station model, once enough snapshots exist</code></pre>
+<p>On Windows, run these through the included <code>eve</code> wrapper (<code>.\eve collect</code>) or after activating the venv. The hourly task runs <code>scheduled_collect.pyw</code>, which takes snapshots every hour and refreshes daily history every 12 hours; its log is <code>data/collect.log</code>. Remove it with <code>Unregister-ScheduledTask -TaskName "EVE Market Collect"</code>.</p>
+<p>Options: <code>--market Jita|Amarr|Dodixie|Hek|Rens|Zarzakh</code> (collect and backfill take several, default all), <code>--list core|commodities|all</code>, <code>--horizon N</code>, <code>--model ridge|gbm</code>, and for the dashboard <code>--port</code>. To keep data current, schedule <code>python -m eve_market collect</code> once a day (ESI history updates shortly after downtime, 11:00 UTC). Refresh this page after collecting; predictions retrain automatically when new data arrives.</p>
+<p>To track a different item, add its name and <code>type_id</code> to one of the dictionaries in <code>data_sets/tracked_items.py</code> (and a display group in <code>ITEM_GROUPS</code>), then collect again. Type IDs can be looked up in <code>data_sets/invTypes_clean.csv</code>.</p>
+
+<h2>Code layout</h2>
+<table>
+  <tbody>
+    <tr><td><code>eve_market/esi.py</code></td><td>ESI client with retries, error-limit backoff and pagination</td></tr>
+    <tr><td><code>eve_market/collect.py</code></td><td>Collection job</td></tr>
+    <tr><td><code>eve_market/storage.py</code></td><td>SQLite schema and queries</td></tr>
+    <tr><td><code>eve_market/forecast.py</code></td><td>Features, models, backtest, forecasts</td></tr>
+    <tr><td><code>eve_market/dashboard/</code></td><td>This website (Flask + Chart.js)</td></tr>
+  </tbody>
+</table>
+</div>
+{% endblock %}

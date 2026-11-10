@@ -1,0 +1,143 @@
+"""Command line entry point.
+
+    python -m eve_market collect              # fetch history + order snapshots for the watchlist
+    python -m eve_market backtest             # walk-forward evaluation of the models
+    python -m eve_market forecast             # predicted % change over the horizon, per item
+    python -m eve_market backfill             # older history (back to 2003) from the EVE Ref archive
+    python -m eve_market login                # log in a character (citadel markets)
+    python -m eve_market hubs --security low  # where the tracked items trade, incl. citadels
+    python -m eve_market dashboard            # local website at http://127.0.0.1:5000
+"""
+from __future__ import annotations
+
+import argparse
+import logging
+
+import numpy as np
+import pandas as pd
+
+from . import storage
+from .collect import collect
+from .config import DEFAULT_MARKET, ITEM_LISTS, MARKETS, REGION_OVERRIDES, load_history
+from .forecast import backtest, build_features, predict_latest
+
+# this is our main function which stores all the return data in our database and then our websites use this data.
+def main(argv: list[str] | None = None) -> None:
+    p = argparse.ArgumentParser(prog="eve_market")
+    p.add_argument("--db", default=str(storage.DEFAULT_DB))
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    c = sub.add_parser("collect")
+    c.add_argument("--list", choices=ITEM_LISTS, default="all", help="which item list to collect (default: all)")
+    c.add_argument("--no-snapshots", action="store_true", help="skip live order-book snapshots")
+    c.add_argument("--snapshots-only", action="store_true", help="only order-book snapshots (skip daily history)")
+    c.add_argument("--auto", action="store_true",
+                   help="for scheduled runs: always snapshot, refresh history only if it's over 12h old")
+    c.add_argument("--log-file", help="append log output to this file")
+    c.add_argument("--market", nargs="+", choices=MARKETS, default=list(MARKETS), help="hubs to collect (default: all)")
+
+    for name in ("backtest", "forecast"):
+        s = sub.add_parser(name)
+        s.add_argument("--horizon", type=int, default=7, help="days ahead to forecast")
+        s.add_argument("--list", choices=ITEM_LISTS, default="core",
+                       help="core = PLEX/injectors/ships, commodities = minerals/ore/components")
+        s.add_argument("--market", choices=MARKETS, default=DEFAULT_MARKET, help="trade hub (default: Jita)")
+        s.add_argument("--station", action="store_true",
+                       help="model the hub station's own price (needs ~45 days of hourly snapshots)")
+    sub.choices["forecast"].add_argument("--model", choices=["gbm", "ridge"], default="gbm")
+    sub.choices["forecast"].add_argument("--out", help="write predictions to this CSV")
+
+    b = sub.add_parser("backfill", help="load older daily history from the EVE Ref archive")
+    b.add_argument("--list", choices=ITEM_LISTS, default="all")
+    b.add_argument("--start", default="2003-10-01", help="first day (YYYY-MM-DD), default: earliest available")
+    b.add_argument("--end", help="last day (default: today)")
+    b.add_argument("--workers", type=int, default=4, help="parallel downloads")
+    b.add_argument("--market", nargs="+", choices=MARKETS, default=list(MARKETS), help="hubs to backfill (default: all)")
+    b.add_argument("--force", action="store_true", help="re-fetch days already backfilled")
+
+    sub.add_parser("login", help="log in an EVE character (needed for citadel markets)")
+    sub.add_parser("whoami", help="show the logged-in character")
+    h = sub.add_parser("hubs", help="rank where the tracked items trade, including citadels")
+    h.add_argument("--security", choices=["high", "low", "null"], help="only show this security band")
+    h.add_argument("--top", type=int, default=80)
+
+    d = sub.add_parser("dashboard", help="serve the local dashboard")
+    d.add_argument("--port", type=int, default=5000)
+    d.add_argument("--host", default="127.0.0.1")
+
+    args = p.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    pd.set_option("display.width", 160, "display.max_rows", 200)
+
+    if args.cmd == "collect":
+        from .collect import history_is_stale
+        if args.log_file:
+            fh = logging.FileHandler(args.log_file, encoding="utf-8")
+            fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+            logging.getLogger().addHandler(fh)
+        history = not args.snapshots_only and (not args.auto or history_is_stale(args.db))
+        collect(ITEM_LISTS[args.list], {m: MARKETS[m] for m in args.market}, REGION_OVERRIDES, args.db,
+                snapshots=not args.no_snapshots, history=history)
+        return
+
+    if args.cmd in ("login", "whoami"):
+        from . import auth
+        try:
+            tok = auth.login() if args.cmd == "login" else auth.load_token()
+            print(f"Logged in as {tok['character_name']} ({tok['character_id']}), scopes: {', '.join(tok['scopes']) if isinstance(tok['scopes'], list) else tok['scopes']}")
+        except auth.NotLoggedIn as exc:
+            print(exc)
+        return
+
+    if args.cmd == "hubs":
+        from .hubs import print_hubs, scan
+        print_hubs(scan(top=args.top), args.security)
+        return
+
+    if args.cmd == "backfill":
+        from .backfill import backfill
+        backfill(ITEM_LISTS[args.list], REGION_OVERRIDES, [MARKETS[m]["region_id"] for m in args.market], args.start, args.end, args.db, args.workers, args.force)
+        return
+
+    if args.cmd == "dashboard":
+        from .dashboard import run
+        print(f"Dashboard at http://{args.host}:{args.port}")
+        run(args.host, args.port, args.db)
+        return
+
+    conn = storage.connect(args.db)
+    feats = build_features(load_history(conn, args.list, args.market), args.horizon)
+    if args.station:
+        from .forecast import MIN_STATION_DAYS, build_station_features, predict_station, station_days
+        st = storage.read_station_prices(conn, MARKETS[args.market]["station_id"],
+                                         list(ITEM_LISTS[args.list].values())).dropna(subset=["mid"])
+        days = station_days(st)
+        res = predict_station(build_station_features(feats, st, args.horizon), "ridge" if args.cmd == "backtest"
+                              else args.model, args.horizon) if days >= MIN_STATION_DAYS else None
+        if res is None:
+            print(f"Station model not ready: {days} of {MIN_STATION_DAYS} days of snapshots at "
+                  f"{MARKETS[args.market]['station']}. The hourly task keeps adding them.")
+            return
+        metrics, latest = res
+        if args.cmd == "backtest":
+            print(metrics.groupby("model")[["mae", "direction_acc"]].mean().sort_values("mae").to_string())
+        else:
+            latest["pred_pct_change"] = (np.exp(latest["pred"]) - 1) * 100
+            latest["pred_station_price"] = latest["mid"] * np.exp(latest["pred"])
+            print(latest[["type_id", "name", "date", "mid", "pred_station_price", "pred_pct_change"]]
+                  .sort_values("pred_pct_change", ascending=False).to_string(index=False))
+        return
+    if args.cmd == "backtest":
+        res = backtest(feats, args.horizon)
+        print(res.to_string(index=False))
+        print("\nMean over folds:")
+        print(res.groupby("model")[["mae", "direction_acc"]].mean().sort_values("mae").to_string())
+    else:
+        preds = predict_latest(feats, args.model)
+        print(preds.to_string(index=False, float_format=lambda x: f"{x:,.2f}"))
+        if args.out:
+            preds.to_csv(args.out, index=False)
+
+
+if __name__ == "__main__":
+    main()
