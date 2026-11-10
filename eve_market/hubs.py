@@ -21,7 +21,7 @@ log = logging.getLogger(__name__)
 # Liquid items that trade nearly everywhere: minerals, injectors, a T2 component, popular ships.
 SAMPLE_TYPES = [34, 35, 36, 11399, 40520, 40519, 25619, 52312, 57486, 17715, 28710]
 
-
+#returns the security class based on the security #
 def security_class(sec: float) -> str:
     # EVE shows security to one decimal, but any system above 0.0 counts as low-sec (0.03 shows as 0.1).
     return "high" if round(sec, 1) >= 0.5 else "low" if sec > 0.0 else "null"

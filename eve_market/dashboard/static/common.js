@@ -1,5 +1,5 @@
 // Shared helpers: number formatting, theme-aware chart colors, ticker ribbon.
-
+//List of help functions that are common among every page on our website
 function fmtIsk(v) {
   if (v === null || v === undefined || isNaN(v)) return "–";
   const a = Math.abs(v);

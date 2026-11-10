@@ -11,7 +11,7 @@ USER_AGENT = "Eve-Market-Predictor/0.1 (+https://github.com/InTheHiggsField/Eve-
 THE_FORGE = 10000002  # region containing Jita
 JITA_4_4 = 60003760  # Jita IV - Moon 4 - Caldari Navy Assembly Plant
 
-
+#Use when auth is not necessary
 class ESIClient:
     def __init__(self, session: requests.Session | None = None, max_retries: int = 4):
         self.session = session or requests.Session()

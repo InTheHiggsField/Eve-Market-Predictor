@@ -13,7 +13,7 @@ from . import storage  # noqa: E402
 EXTRA_REGIONS = tuple(sorted(set(REGION_OVERRIDES.values())))
 
 
-def load_history(conn, list_name: str, market: str = DEFAULT_MARKET):
+def load_history(conn, list_name: str, market: str = DEFAULT_MARKET, since: str | None = None):
     """Daily history for one item list at one hub (plus the global PLEX market)."""
     return storage.read_history(conn, list(ITEM_LISTS[list_name].values()),
-                                MARKETS[market]["region_id"], EXTRA_REGIONS)
+                                MARKETS[market]["region_id"], EXTRA_REGIONS, since)

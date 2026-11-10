@@ -11,6 +11,9 @@ from . import storage
 
 log = logging.getLogger(__name__)
 
+RAW_ORDER_BAND = 0.20  # keep individual orders priced within 20% of the best price
+RAW_ORDER_DAYS = 90    # and only for this many days
+
 
 def _top_pct_price(orders: list[dict], highest_first: bool, pct: float = 0.05) -> float | None:
     """Volume-weighted price of the best `pct` of the book's volume. Much steadier than the single
@@ -33,12 +36,27 @@ def _top_pct_price(orders: list[dict], highest_first: bool, pct: float = 0.05) -
     return isk / got
 
 
+def near_touch(orders: list[dict], pct: float) -> list[dict]:
+    """Orders priced within `pct` of the best price on their own side of the book."""
+    out = []
+    for buy in (True, False):
+        side = [o for o in orders if bool(o["is_buy_order"]) == buy]
+        if not side:
+            continue
+        best = max(o["price"] for o in side) if buy else min(o["price"] for o in side)
+        out += [o for o in side if (o["price"] >= best * (1 - pct) if buy else o["price"] <= best * (1 + pct))]
+    return out
+
+
 def summarize_orders(orders: list[dict], location_id: int | None) -> dict:
     if location_id is not None:
         orders = [o for o in orders if o["location_id"] == location_id]
     bids = [o for o in orders if o["is_buy_order"]]
     asks = [o for o in orders if not o["is_buy_order"]]
+    touch = near_touch(orders, 0.05)  # depth: ISK resting within 5% of the best price
     return {
+        "bid_depth": sum(o["price"] * o["volume_remain"] for o in touch if o["is_buy_order"]),
+        "ask_depth": sum(o["price"] * o["volume_remain"] for o in touch if not o["is_buy_order"]),
         "bid_top5": _top_pct_price(bids, highest_first=True),
         "ask_top5": _top_pct_price(asks, highest_first=False),
         "best_bid": max((o["price"] for o in bids), default=None),
@@ -111,13 +129,18 @@ def collect(items: dict[str, int], markets: dict[str, dict], region_overrides: d
                 src = citadel_orders[station].get(type_id, []) if station in citadel_orders else orders
                 storage.insert_snapshot(conn, {"taken_at": taken_at, "region_id": region, "location_id": station,
                                                "type_id": type_id, **summarize_orders(src, station)})
+                # Individual orders near the top of the book, for concentration and churn checks.
+                here = [o for o in src if o.get("location_id") == station and "order_id" in o]
+                storage.insert_raw_orders(conn, taken_at, station, type_id, near_touch(here, RAW_ORDER_BAND))
             log.debug("[%d/%d] %s in region %s: %d history rows", i, len(jobs), names[type_id], region, n)
     kind = "history+snapshots" if history and snapshots else "history" if history else "snapshots"
+    if snapshots:
+        storage.prune_raw_orders(conn, RAW_ORDER_DAYS)
     storage.log_run(conn, taken_at, kind)
     log.info("Collected %d item/region pairs for %d hubs at %s (%s)", len(jobs), len(markets), taken_at, kind)
     conn.close()
 
-
+#Checks to see if history is old and needs updating. Really just looks at the database and checks the history table for last update
 def history_is_stale(db_path=storage.DEFAULT_DB, hours: float = 12) -> bool:
     """True if history hasn't been refreshed in `hours` (used by --auto for hourly runs)."""
     conn = storage.connect(db_path)

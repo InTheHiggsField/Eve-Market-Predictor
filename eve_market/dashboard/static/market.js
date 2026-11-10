@@ -1,3 +1,4 @@
+//Set of helper functions for our market page
 chartDefaults();
 const state = { list: "all", group: "", q: "", sortKey: "isk_30d", sortDir: -1, selected: null, range: 90, overview: "isk_30d" };
 let items = [], detailChart, overviewChart, historyCache = {};

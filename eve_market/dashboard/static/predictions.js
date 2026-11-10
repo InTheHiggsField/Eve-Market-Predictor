@@ -1,3 +1,4 @@
+//Set of helper function for our predictions page
 chartDefaults();
 const state = { list: "core", model: "ridge", horizon: 7, group: "" };
 const MODEL_LABEL = { no_change: "No change (baseline)", momentum: "Momentum (baseline)", ridge: "Ridge", gbm: "Gradient boosting" };

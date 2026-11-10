@@ -3,7 +3,7 @@
 Chosen for high value and high daily ISK turnover (approved list, Nov 2026).
 Only these items are collected and stored.
 """
-
+#Tracked high volume items
 TRACKED_ITEMS = {
     # PLEX & skill trading
     "PLEX": 44992,
@@ -77,6 +77,7 @@ def _group(names: str, label: str) -> dict[str, str]:
 
 
 # Display groups for the dashboard.
+#This is a dictionary that groups different items by their general category set by CCP
 ITEM_GROUPS = {
     **_group("PLEX, Large Skill Injector, Skill Extractor, Small Skill Injector, Daily Alpha Injector", "PLEX & skills"),
     **_group("Logic Circuit", "Salvage"),

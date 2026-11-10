@@ -6,6 +6,8 @@
 Credentials come from a local `.env` file (see `.env.example`); the token is saved to
 data/esi_token.json. Both are git-ignored. Your EVE password only ever goes to EVE's own site.
 """
+
+#This .py is only necessary if you need to gather data that requires a logged in user. But it is not necessary for the market modeling contained in forecast.py
 from __future__ import annotations
 
 import base64

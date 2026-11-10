@@ -14,7 +14,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 LAGS = (1, 3, 7, 14, 30)
-
+"""This is where all of the forecasting models rest"""
 
 def _daily(g: pd.DataFrame) -> pd.DataFrame:
     """Reindex one item to a continuous daily calendar (no-trade days: carry price, zero volume)."""
@@ -29,7 +29,7 @@ def _daily(g: pd.DataFrame) -> pd.DataFrame:
     return g.rename_axis("date").reset_index()
 
 
-def build_features(history: pd.DataFrame, horizon: int = 7) -> pd.DataFrame:
+def build_features(history: pd.DataFrame, horizon: int = 7) -> pd.DataFrame: #Horizon = Future, attempts to forecast a week in the future by default
     frames = []
     for _, g in history.groupby("type_id"):
         if len(g) < 60:

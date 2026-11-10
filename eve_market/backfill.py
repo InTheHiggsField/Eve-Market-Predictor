@@ -23,6 +23,8 @@ from .esi import USER_AGENT
 log = logging.getLogger(__name__)
 ROOT_INDEX = "https://data.everef.net/market-history/index.json"
 
+#This set of function looks into the historical data from evefet.net to gather long term historical market data inorder to enable XGBoost prediction modeling
+
 LOG_SCHEMA = """
 CREATE TABLE IF NOT EXISTS backfill_regions (
     file_date TEXT NOT NULL,

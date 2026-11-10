@@ -21,7 +21,7 @@ from .collect import collect
 from .config import DEFAULT_MARKET, ITEM_LISTS, MARKETS, REGION_OVERRIDES, load_history
 from .forecast import backtest, build_features, predict_latest
 
-
+# this is our main function which stores all the return data in our database and then our websites use this data.
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="eve_market")
     p.add_argument("--db", default=str(storage.DEFAULT_DB))

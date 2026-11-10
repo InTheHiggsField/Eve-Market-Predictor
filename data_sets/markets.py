@@ -6,7 +6,7 @@ Picked from live order counts across all regions (Nov 2026); the five high-sec h
 carry far more orders for the tracked items than anywhere else. Low-sec and null-sec trading
 mostly happens in citadels with private markets; Zarzakh is the one usable null-sec hub.
 """
-
+#Market Dictionary
 MARKETS = {
     "Jita": {"region_id": 10000002, "region": "The Forge", "station_id": 60003760,
              "station": "Jita IV - Moon 4 - Caldari Navy Assembly Plant", "security": "high"},
