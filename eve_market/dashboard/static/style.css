@@ -103,6 +103,9 @@ tbody tr.selected { background: var(--accent-soft); }
 
 .chart-box { position: relative; height: 300px; }
 .chart-box.small { height: 190px; }
+/* Long bar lists scroll inside their panel instead of squashing the labels together. */
+.scroll-box { height: 480px; overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; }
+.scroll-box .chart-box { height: auto; }
 .card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 4px; }
 .card-head .name { font-weight: 600; }
 .big { font-size: 18px; font-weight: 600; }

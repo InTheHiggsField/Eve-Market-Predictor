@@ -35,14 +35,14 @@ function renderRank() {
   const items = visibleItems().slice().sort((a, b) => b.pred_pct - a.pred_pct);
   rankChart?.destroy();
   const box = document.getElementById("rank-chart").parentElement;
-  box.style.height = Math.max(300, items.length * 18) + "px";
+  box.style.height = Math.max(320, items.length * 22 + 50) + "px";
   rankChart = new Chart(document.getElementById("rank-chart"), {
     type: "bar",
     data: { labels: items.map(i => i.name), datasets: [{ data: items.map(i => i.pred_pct),
       backgroundColor: items.map(i => i.pred_pct >= 0 ? css("--up") : css("--down")), borderRadius: 3 }] },
     options: { indexAxis: "y", maintainAspectRatio: false, plugins: { legend: { display: false },
       tooltip: { callbacks: { label: c => `${fmtPct(c.raw, 2)} → ${fmtIsk(items[c.dataIndex].pred_price)}` } } },
-      scales: { x: { ticks: { callback: v => v + "%" } }, y: { ticks: { autoSkip: false, font: { size: 11 } } } },
+      scales: { x: { position: "top", ticks: { callback: v => v + "%" } }, y: { ticks: { autoSkip: false, font: { size: 11 } } } },
       onClick: (_, els) => { if (els.length) document.getElementById("card-" + items[els[0].index].type_id).scrollIntoView({ behavior: "smooth", block: "center" }); } },
   });
 }

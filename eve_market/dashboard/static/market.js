@@ -51,13 +51,15 @@ function renderOverview() {
   const isPct = k !== "isk_30d";
   const colors = rows.map(i => isPct ? (i[k] >= 0 ? css("--up") : css("--down")) : css("--accent"));
   overviewChart?.destroy();
+  const box = document.getElementById("overview-chart").parentElement;
+  box.style.height = Math.max(440, rows.length * 22 + 50) + "px";  // ~22px per bar keeps every label readable
   overviewChart = new Chart(document.getElementById("overview-chart"), {
     type: "bar",
     data: { labels: rows.map(i => i.name), datasets: [{ data: rows.map(i => i[k]), backgroundColor: colors, borderRadius: 3 }] },
     options: {
       indexAxis: "y", maintainAspectRatio: false, plugins: { legend: { display: false },
         tooltip: { callbacks: { label: c => isPct ? fmtPct(c.raw) : fmtIsk(c.raw) + " ISK/day" } } },
-      scales: { x: { type: isPct ? "linear" : "logarithmic", ticks: { callback: v => isPct ? v + "%" : (Math.abs(Math.log10(v) - Math.round(Math.log10(v))) < 1e-9 ? fmtIsk(v) : "") } }, y: { ticks: { autoSkip: false, font: { size: 11 } } } },
+      scales: { x: { position: "top", type: isPct ? "linear" : "logarithmic", ticks: { callback: v => isPct ? v + "%" : (Math.abs(Math.log10(v) - Math.round(Math.log10(v))) < 1e-9 ? fmtIsk(v) : "") } }, y: { ticks: { autoSkip: false, font: { size: 11 } } } },
       onClick: (_, els) => { if (els.length) select(rows[els[0].index].type_id); },
     },
   });
