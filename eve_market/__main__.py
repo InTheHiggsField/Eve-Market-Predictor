@@ -3,6 +3,7 @@
     python -m eve_market collect              # fetch history + order snapshots for the watchlist
     python -m eve_market backtest             # walk-forward evaluation of the models
     python -m eve_market forecast             # predicted % change over the horizon, per item
+    python -m eve_market dashboard            # local website at http://127.0.0.1:5000
 """
 from __future__ import annotations
 
@@ -41,12 +42,22 @@ def main(argv: list[str] | None = None) -> None:
     sub.choices["forecast"].add_argument("--model", choices=["gbm", "ridge"], default="gbm")
     sub.choices["forecast"].add_argument("--out", help="write predictions to this CSV")
 
+    d = sub.add_parser("dashboard", help="serve the local dashboard")
+    d.add_argument("--port", type=int, default=5000)
+    d.add_argument("--host", default="127.0.0.1")
+
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     pd.set_option("display.width", 160, "display.max_rows", 200)
 
     if args.cmd == "collect":
         collect(ITEM_LISTS[args.list], args.region, args.location, REGION_OVERRIDES, args.db, not args.no_snapshots)
+        return
+
+    if args.cmd == "dashboard":
+        from .dashboard import run
+        print(f"Dashboard at http://{args.host}:{args.port}")
+        run(args.host, args.port, args.db)
         return
 
     conn = storage.connect(args.db)

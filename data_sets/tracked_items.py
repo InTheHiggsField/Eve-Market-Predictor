@@ -70,3 +70,24 @@ ITEM_LISTS = {
 # PLEX trades on its own global market rather than in Jita (The Forge).
 GLOBAL_PLEX_MARKET = 19000001
 REGION_OVERRIDES = {"PLEX": GLOBAL_PLEX_MARKET}
+
+
+def _group(names: str, label: str) -> dict[str, str]:
+    return {n.strip(): label for n in names.split(",")}
+
+
+# Display groups for the dashboard.
+ITEM_GROUPS = {
+    **_group("PLEX, Large Skill Injector, Skill Extractor, Small Skill Injector, Daily Alpha Injector", "PLEX & skills"),
+    **_group("Logic Circuit", "Salvage"),
+    **_group("Paladin, Vargur, Golem, Kronos, Gila, Loki", "Ships"),
+    **_group("Tritanium, Pyerite, Mexallon, Isogen, Nocxium, Zydrine, Megacyte, Morphite", "Minerals"),
+    **_group("Crystalline Polycrase, Crystalline Moissanite, Crystalline Raspite, Crystalline Kangite, "
+             "Neo-Jadarite, Eleutrium, Chromodynamic Tricarboxyls", "Specialty minerals"),
+    **_group("Compressed Gneiss IV-Grade, Compressed Zeolites, Compressed Veldspar, Compressed Scordite, "
+             "Compressed Bitumens", "Compressed ore"),
+    **_group("Zero-Point Field Manipulator, Auto-Integrity Preservation Seal, Life Support Backup Unit, "
+             "Photon Microprocessor, Quantum Microprocessor, Core Temperature Regulator", "T2 components"),
+    **_group("Neurolink Protection Cell, Capital Core Temperature Regulator, Capital Construction Parts",
+             "Capital components"),
+}

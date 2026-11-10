@@ -13,7 +13,12 @@ pip install -r requirements.txt
 python -m eve_market collect     # ~13 months of daily history for every tracked item + a live order-book snapshot
 python -m eve_market backtest    # walk-forward evaluation vs. naive baselines
 python -m eve_market forecast --out data/forecast.csv   # predicted 7-day % change per item
+python -m eve_market dashboard   # local website at http://127.0.0.1:5000
 ```
+
+The dashboard has three pages: **Market data** (ticker ribbon, sortable table, price/volume charts),
+**Predictions** (forecast graphs with past out-of-sample predictions and backtest scores), and **About**
+(how the data and models work and how to reproduce them).
 Options: `--list core|commodities|all` (collect defaults to all, backtest/forecast to core), `--horizon N` (days ahead), `--model gbm|ridge`,
 `--region` / `--location` (default The Forge / Jita 4-4), `--no-snapshots`.
 
@@ -34,4 +39,5 @@ to build up bid/ask history that ESI does not keep for you.
 - `eve_market/storage.py` - SQLite schema and helpers
 - `eve_market/collect.py` - collection job
 - `eve_market/forecast.py` - features, backtest, predictions
+- `eve_market/dashboard/` - Flask + Chart.js dashboard
 - `tests/` - `python -m pytest`

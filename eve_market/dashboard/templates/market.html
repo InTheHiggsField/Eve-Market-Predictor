@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Market data · EVE Market Predictor{% endblock %}
+{% block content %}
+<h1>Market data</h1>
+<p class="sub" id="asof">Daily history from ESI. PLEX from the global PLEX market, everything else from Jita.</p>
+
+<div class="controls">
+  <label>List
+    <span class="seg" id="list-seg">
+      <button data-v="all" class="on">All</button><button data-v="core">Core</button><button data-v="commodities">Commodities</button>
+    </span>
+  </label>
+  <label>Group <select id="group"><option value="">All groups</option></select></label>
+  <label>Search <input type="search" id="search" placeholder="Item name"></label>
+</div>
+
+<div class="grid-2">
+  <div class="panel">
+    <div class="card-head"><h2 id="detail-title">Select an item</h2><span class="seg" id="range-seg">
+      <button data-v="30">30d</button><button data-v="90" class="on">90d</button><button data-v="365">1y</button><button data-v="9999">All</button></span></div>
+    <div class="stats" id="detail-stats"></div>
+    <div class="chart-box"><canvas id="detail-chart"></canvas></div>
+  </div>
+  <div class="panel">
+    <div class="card-head"><h2>Overview</h2><span class="seg" id="overview-seg">
+      <button data-v="isk_30d" class="on">ISK traded/day</button><button data-v="chg_7d">7-day change</button><button data-v="chg_30d">30-day change</button></span></div>
+    <div class="chart-box"><canvas id="overview-chart"></canvas></div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="table-wrap">
+    <table id="tbl">
+      <thead><tr>
+        <th data-k="name">Item</th><th data-k="group">Group</th>
+        <th data-k="price" class="num">Avg price</th>
+        <th data-k="chg_1d" class="num">1d</th><th data-k="chg_7d" class="num">7d</th><th data-k="chg_30d" class="num">30d</th>
+        <th data-k="best_bid" class="num">Best bid</th><th data-k="best_ask" class="num">Best ask</th><th data-k="spread_pct" class="num">Spread</th>
+        <th data-k="volume_30d" class="num">Units/day</th><th data-k="isk_30d" class="num">ISK/day</th><th data-k="orders_30d" class="num">Trades/day</th>
+        <th>30-day trend</th>
+      </tr></thead>
+      <tbody><tr><td colspan="13" class="loading">Loading…</td></tr></tbody>
+    </table>
+  </div>
+  <p class="muted" style="margin:10px 0 0;font-size:12px">Volume, ISK/day and trades/day are 30-day averages. Bid/ask come from the latest order snapshot (Jita 4-4; region-wide for PLEX). Click a column to sort, click a row to chart it.</p>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='market.js') }}"></script>{% endblock %}

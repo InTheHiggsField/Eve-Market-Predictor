@@ -53,3 +53,24 @@ def test_storage_roundtrip(tmp_path):
                                           "lowest": 4.9, "volume": 10, "order_count": 2}])
     df = storage.read_history(conn, [34])
     assert len(df) == 1 and df.loc[0, "average"] == 5.0
+
+
+def test_dashboard_api(tmp_path):
+    from eve_market.dashboard import create_app
+    hist = _synthetic_history(n_items=3)
+    conn = storage.connect(tmp_path / "d.db")
+    from data_sets.tracked_items import TRACKED_ITEMS
+    ids = list(TRACKED_ITEMS.items())[:3]
+    storage.save_type_names(conn, dict(ids))
+    for (name, tid), (_, g) in zip(ids, hist.groupby("type_id")):
+        rows = g.assign(date=g["date"].dt.strftime("%Y-%m-%d")).to_dict("records")
+        storage.upsert_history(conn, 10000002, tid, rows)
+    conn.close()
+    client = create_app(tmp_path / "d.db").test_client()
+    for page in ("/", "/predictions", "/about"):
+        assert client.get(page).status_code == 200
+    items = client.get("/api/items?list=core").get_json()
+    assert len(items) == 3 and all(i["price"] > 0 for i in items)
+    assert client.get(f"/api/history/{ids[0][1]}").status_code == 200
+    pred = client.get("/api/predictions?list=core&model=ridge&horizon=7").get_json()
+    assert len(pred["items"]) == 3 and {r["model"] for r in pred["summary"]} == {"no_change", "momentum", "ridge", "gbm"}

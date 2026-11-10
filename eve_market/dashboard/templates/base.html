@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}EVE Market Predictor{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="{{ url_for('static', filename='common.js') }}"></script>
+</head>
+<body>
+  <div class="ticker" aria-label="Market ticker"><div class="ticker-track" id="ticker"><span class="muted">Loading market…</span></div></div>
+  <header class="topbar">
+    <div class="brand"><span class="logo">◈</span> EVE Market Predictor</div>
+    <nav>
+      <a href="/" class="{{ 'active' if page == 'market' }}">Market data</a>
+      <a href="/predictions" class="{{ 'active' if page == 'predictions' }}">Predictions</a>
+      <a href="/about" class="{{ 'active' if page == 'about' }}">About</a>
+    </nav>
+  </header>
+  <main>{% block content %}{% endblock %}</main>
+  <script>initTicker();</script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

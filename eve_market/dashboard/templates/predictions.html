@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Predictions · EVE Market Predictor{% endblock %}
+{% block content %}
+<h1>Predictions</h1>
+<p class="sub">Forecast of each item's average price <span id="h-label">7</span> days after the latest day of data, with the model's past out-of-sample predictions overlaid so you can judge how far to trust it.</p>
+
+<div class="controls">
+  <label>List
+    <span class="seg" id="list-seg"><button data-v="core" class="on">Core</button><button data-v="commodities">Commodities</button><button data-v="all">All</button></span>
+  </label>
+  <label>Model
+    <span class="seg" id="model-seg"><button data-v="ridge" class="on">Ridge</button><button data-v="gbm">Gradient boosting</button></span>
+  </label>
+  <label>Horizon
+    <span class="seg" id="horizon-seg"><button data-v="3">3d</button><button data-v="7" class="on">7d</button><button data-v="14">14d</button></span>
+  </label>
+  <label>Group <select id="group"><option value="">All groups</option></select></label>
+</div>
+
+<div id="verdict" class="note" hidden></div>
+
+<div class="grid-2">
+  <div class="panel">
+    <h2>Backtest (5 walk-forward folds of 21 days)</h2>
+    <div class="table-wrap"><table id="summary"><tbody><tr><td class="loading">Training models… (a few seconds)</td></tr></tbody></table></div>
+    <p class="muted" style="font-size:12px;margin:10px 0 0">MAE is the mean absolute error of the predicted log return (0.05 ≈ 5% off). Direction is how often the predicted sign of the move was right, on days the price actually moved. "No change" always predicts 0%; "momentum" assumes the last move continues.</p>
+  </div>
+  <div class="panel">
+    <h2>Predicted change</h2>
+    <div class="chart-box"><canvas id="rank-chart"></canvas></div>
+  </div>
+</div>
+
+<div class="cards" id="cards"></div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='predictions.js') }}"></script>{% endblock %}

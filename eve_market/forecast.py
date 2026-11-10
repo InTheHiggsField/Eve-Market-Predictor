@@ -75,12 +75,16 @@ def _metrics(y: np.ndarray, pred: np.ndarray) -> dict:
     }
 
 
-def backtest(feats: pd.DataFrame, horizon: int = 7, n_folds: int = 5, test_days: int = 21) -> pd.DataFrame:
+def backtest(feats: pd.DataFrame, horizon: int = 7, n_folds: int = 5, test_days: int = 21,
+             return_predictions: bool = False):
     """Walk-forward evaluation. Training rows end `horizon` days before each test window so
-    no training target overlaps the test period."""
+    no training target overlaps the test period.
+
+    With `return_predictions=True`, also returns the out-of-sample predictions for every
+    test row (one column per model), for plotting predicted vs. actual."""
     data = feats.dropna(subset=FEATURES + ["target"])
     dates = np.sort(data["date"].unique())
-    results = []
+    results, oos = [], []
     for k in range(n_folds, 0, -1):
         test_start = dates[-k * test_days]
         test_end = test_start + np.timedelta64(test_days, "D")
@@ -99,7 +103,12 @@ def backtest(feats: pd.DataFrame, horizon: int = 7, n_folds: int = 5, test_days:
             preds[name] = model.predict(test[FEATURES])
         for name, p in preds.items():
             results.append({"fold_start": pd.Timestamp(test_start).date(), "model": name, **_metrics(y, p)})
-    return pd.DataFrame(results)
+        if return_predictions:
+            oos.append(test[["date", "type_id", "average", "target"]].assign(**preds))
+    results = pd.DataFrame(results)
+    if return_predictions:
+        return results, pd.concat(oos, ignore_index=True) if oos else pd.DataFrame()
+    return results
 
 
 def predict_latest(feats: pd.DataFrame, model_name: str = "gbm") -> pd.DataFrame:
