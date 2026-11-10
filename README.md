@@ -10,14 +10,14 @@ pip install -r requirements.txt
 
 ### Usage
 ```
-python -m eve_market collect     # ~13 months of daily Jita (The Forge) history + a live order-book snapshot
+python -m eve_market collect     # ~13 months of daily history for the tracked items + a live order-book snapshot
 python -m eve_market backtest    # walk-forward evaluation vs. naive baselines
 python -m eve_market forecast --out data/forecast.csv   # predicted 7-day % change per item
 ```
-Options: `--horizon N` (days ahead), `--model gbm|ridge`, `--types 34 35 ...` (override the watchlist),
+Options: `--horizon N` (days ahead), `--model gbm|ridge`,
 `--region` / `--location` (default The Forge / Jita 4-4), `--no-snapshots`.
 
-The watchlist lives in `data_sets/ImportantItems.py`. Data is stored in `data/market.db` (SQLite, git-ignored);
+The tracked items live in `data_sets/tracked_items.py` as `TRACKED_ITEMS = {"in-game name": type_id}`; only those are collected. PLEX is fetched from its global market (region 19000001), everything else from Jita. Data is stored in `data/market.db` (SQLite, git-ignored);
 re-running `collect` upserts history and appends a new order snapshot, so run it daily (e.g. Task Scheduler)
 to build up bid/ask history that ESI does not keep for you.
 

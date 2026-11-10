@@ -51,5 +51,5 @@ def test_storage_roundtrip(tmp_path):
                                           "lowest": 3.9, "volume": 10, "order_count": 2}])
     storage.upsert_history(conn, 1, 34, [{"date": "2026-01-01", "average": 5.0, "highest": 5.1,
                                           "lowest": 4.9, "volume": 10, "order_count": 2}])
-    df = storage.read_history(conn, 1)
+    df = storage.read_history(conn, [34])
     assert len(df) == 1 and df.loc[0, "average"] == 5.0

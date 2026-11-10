@@ -62,18 +62,18 @@ def insert_snapshot(conn: sqlite3.Connection, row: dict) -> None:
     conn.commit()
 
 
-def load_type_names(conn: sqlite3.Connection, csv_path: Path) -> None:
-    if conn.execute("SELECT COUNT(*) FROM types").fetchone()[0]:
-        return
-    df = pd.read_csv(csv_path)
-    conn.executemany("INSERT OR REPLACE INTO types VALUES (?,?)", df[["typeID", "typeName"]].itertuples(index=False))
+def save_type_names(conn: sqlite3.Connection, items: dict[str, int]) -> None:
+    conn.executemany("INSERT OR REPLACE INTO types VALUES (?,?)", [(t, n) for n, t in items.items()])
     conn.commit()
 
 
-def read_history(conn: sqlite3.Connection, region_id: int) -> pd.DataFrame:
+def read_history(conn: sqlite3.Connection, type_ids: list[int]) -> pd.DataFrame:
+    """History for the given types, whichever region each was collected from."""
+    marks = ",".join("?" * len(type_ids))
     df = pd.read_sql_query(
-        "SELECT h.*, t.name FROM history h LEFT JOIN types t USING (type_id) WHERE region_id = ? ORDER BY type_id, date",
-        conn, params=(region_id,),
+        f"SELECT h.*, t.name FROM history h LEFT JOIN types t USING (type_id) "
+        f"WHERE h.type_id IN ({marks}) ORDER BY type_id, date",
+        conn, params=tuple(type_ids),
     )
     df["date"] = pd.to_datetime(df["date"])
     return df
