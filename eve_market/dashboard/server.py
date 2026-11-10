@@ -13,11 +13,11 @@ import numpy as np
 import pandas as pd
 from flask import Flask, abort, jsonify, render_template, request
 
-from .. import storage
-from ..config import DEFAULT_MARKET, ITEM_GROUPS, ITEM_LISTS, MARKETS, REGION_OVERRIDES, load_history
-from ..forecast import (DEFAULT_MIN_ISK, FEATURES, MIN_STATION_DAYS, apply_health_floor, backtest, build_features,
+from eve_market import storage
+from eve_market.config import DEFAULT_MARKET, ITEM_GROUPS, ITEM_LISTS, MARKETS, REGION_OVERRIDES, load_history
+from eve_market.forecast import (DEFAULT_MIN_ISK, FEATURES, MIN_STATION_DAYS, apply_health_floor, backtest, build_features,
                         build_station_features, make_models, predict_station, station_days)
-from ..health import health_table
+from eve_market.health import health_table
 
 HERE = Path(__file__).resolve().parent
 LIST_OF = {name: lst for lst in ("core", "commodities") for name in ITEM_LISTS[lst]}

@@ -3,7 +3,7 @@ import pandas as pd
 
 from eve_market import storage
 from eve_market.collect import summarize_orders
-from eve_market.forecast import FEATURES, backtest, build_features, predict_latest
+from eve_market.forecast import backtest, build_features, predict_latest
 
 
 def test_summarize_orders_filters_station():

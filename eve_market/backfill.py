@@ -17,8 +17,8 @@ from datetime import date
 
 import requests
 
-from . import storage
-from .esi import USER_AGENT
+from eve_market import storage
+from eve_market.esi import USER_AGENT
 
 log = logging.getLogger(__name__)
 ROOT_INDEX = "https://data.everef.net/market-history/index.json"

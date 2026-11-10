@@ -17,10 +17,10 @@ import logging
 import numpy as np
 import pandas as pd
 
-from . import storage
-from .collect import collect
-from .config import DEFAULT_MARKET, ITEM_LISTS, MARKETS, REGION_OVERRIDES, load_history
-from .forecast import DEFAULT_MIN_ISK, apply_health_floor, backtest, build_features, predict_latest
+from eve_market import storage
+from eve_market.collect import collect, history_is_stale
+from eve_market.config import DEFAULT_MARKET, ITEM_LISTS, MARKETS, REGION_OVERRIDES, load_history
+from eve_market.forecast import DEFAULT_MIN_ISK, apply_health_floor, backtest, build_features, predict_latest
 
 # this is our main function which stores all the return data in our database and then our websites use this data.
 def main(argv: list[str] | None = None) -> None:
@@ -78,7 +78,6 @@ def main(argv: list[str] | None = None) -> None:
     pd.set_option("display.width", 160, "display.max_rows", 200)
 
     if args.cmd == "collect":
-        from .collect import history_is_stale
         if args.log_file:
             fh = logging.FileHandler(args.log_file, encoding="utf-8")
             fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
@@ -89,7 +88,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if args.cmd in ("login", "whoami"):
-        from . import auth
+        from eve_market import auth
         try:
             tok = auth.login() if args.cmd == "login" else auth.load_token()
             print(f"Logged in as {tok['character_name']} ({tok['character_id']}), scopes: {', '.join(tok['scopes']) if isinstance(tok['scopes'], list) else tok['scopes']}")
@@ -98,22 +97,22 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if args.cmd == "hubs":
-        from .hubs import print_hubs, scan
+        from eve_market.hubs import print_hubs, scan
         print_hubs(scan(top=args.top), args.security)
         return
 
     if args.cmd == "backfill":
-        from .backfill import backfill
+        from eve_market.backfill import backfill
         backfill(ITEM_LISTS[args.list], REGION_OVERRIDES, [MARKETS[m]["region_id"] for m in args.market], args.start, args.end, args.db, args.workers, args.force)
         return
 
     if args.cmd == "health":
-        from .health import health_table, print_health
+        from eve_market.health import health_table, print_health
         print_health(health_table(storage.connect(args.db), args.market, args.list, args.min_isk))
         return
 
     if args.cmd == "dashboard":
-        from .dashboard import run
+        from eve_market.dashboard import run
         print(f"Dashboard at http://{args.host}:{args.port}")
         run(args.host, args.port, args.db)
         return
@@ -127,7 +126,7 @@ def main(argv: list[str] | None = None) -> None:
         print("No item at this hub is above the health floor. Lower it with --min-isk.")
         return
     if args.station:
-        from .forecast import MIN_STATION_DAYS, build_station_features, predict_station, station_days
+        from eve_market.forecast import MIN_STATION_DAYS, build_station_features, predict_station, station_days
         st = storage.read_station_prices(conn, MARKETS[args.market]["station_id"],
                                          list(ITEM_LISTS[args.list].values())).dropna(subset=["mid"])
         days = station_days(st)

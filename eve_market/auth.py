@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
 
-from .esi import USER_AGENT
+from eve_market.esi import USER_AGENT
 
 ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = ROOT / ".env"

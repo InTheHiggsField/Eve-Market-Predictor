@@ -19,9 +19,9 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from . import storage
-from .config import DEFAULT_MARKET, ITEM_GROUPS, ITEM_LISTS, MARKETS, load_history
-from .forecast import DEFAULT_MIN_ISK, clean_log_price
+from eve_market import storage
+from eve_market.config import DEFAULT_MARKET, ITEM_GROUPS, ITEM_LISTS, MARKETS, load_history
+from eve_market.forecast import DEFAULT_MIN_ISK, clean_log_price
 
 WINDOW = 30       # days for liquidity metrics
 LONG_WINDOW = 90  # days for volatility and autocorrelation, which need more data to be stable
@@ -167,8 +167,9 @@ def health_table(conn, market: str = DEFAULT_MARKET, list_name: str = "all",
     if not frames:
         return pd.DataFrame()
     df = pd.concat(frames, ignore_index=True)
-    return score(df, min_isk).query("market == @market and type_id in @ITEM_LISTS[@list_name].values()") \
-        .sort_values("score", ascending=False).reset_index(drop=True)
+    df = score(df, min_isk)
+    df = df[(df["market"] == market) & df["type_id"].isin(ITEM_LISTS[list_name].values())]
+    return df.sort_values("score", ascending=False).reset_index(drop=True)
 
 
 def score(df: pd.DataFrame, min_isk: float = DEFAULT_MIN_ISK) -> pd.DataFrame:
