@@ -131,3 +131,25 @@ def test_snapshot_migration_keeps_rows(tmp_path):
                                    "best_bid": 1, "best_ask": 2, "bid_volume": 0, "ask_volume": 0,
                                    "bid_orders": 0, "ask_orders": 0})
     assert conn.execute("SELECT COUNT(*) FROM order_snapshots").fetchone()[0] == 2
+
+
+def test_auth_env_and_jwt_claims(tmp_path):
+    import base64, json
+    from eve_market import auth
+    env = tmp_path / ".env"
+    env.write_text("EVE_CLIENT_ID=abc\nEVE_CLIENT_SECRET=\n", encoding="utf-8")
+    try:
+        auth.load_env(env)
+        assert False, "missing secret should raise"
+    except auth.NotLoggedIn as exc:
+        assert "EVE_CLIENT_SECRET" in str(exc)
+    env.write_text("EVE_CLIENT_ID=abc\nEVE_CLIENT_SECRET=xyz\n", encoding="utf-8")
+    assert auth.load_env(env)["EVE_CALLBACK_URL"].endswith("/callback")
+    payload = base64.urlsafe_b64encode(json.dumps({"sub": "CHARACTER:EVE:123", "name": "Pilot"}).encode()).decode().rstrip("=")
+    assert auth._claims(f"h.{payload}.s") == {"sub": "CHARACTER:EVE:123", "name": "Pilot"}
+
+
+def test_security_bands():
+    from eve_market.hubs import security_class
+    assert security_class(0.46) == "high" and security_class(0.44) == "low"
+    assert security_class(0.04) == "low" and security_class(-0.2) == "null"

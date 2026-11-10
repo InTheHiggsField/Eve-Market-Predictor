@@ -27,6 +27,16 @@ The tracked items live in `data_sets/tracked_items.py` as `{"in-game name": type
 re-running `collect` upserts history and appends a new order snapshot, so run it daily (e.g. Task Scheduler)
 to build up bid/ask history that ESI does not keep for you.
 
+### Character login (citadel markets)
+Player-owned citadels (e.g. low-sec trade Keepstars) need a logged-in character:
+1. Create an app at https://developers.eveonline.com/applications with callback `http://localhost:8765/callback`
+   and scopes `esi-markets.structure_markets.v1`, `esi-universe.read_structures.v1`.
+2. Copy `.env.example` to `.env` and fill in the Client ID and Secret (`.env` is git-ignored; never commit it).
+3. `python -m eve_market login` opens EVE's login page; the refresh token is saved to `data/esi_token.json`.
+4. `python -m eve_market hubs --security low` ranks where the tracked items trade, with citadel names.
+   Add a citadel to `data_sets/markets.py` (its structure ID as `station_id`) to track it; `collect` then
+   reads its full market with the saved login.
+
 ### How the baseline works
 - **Data**: ESI `/markets/{region}/history` (daily average/high/low/volume) and `/markets/{region}/orders`.
 - **Target**: log return of the daily average price over the next `horizon` days.

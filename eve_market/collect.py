@@ -5,7 +5,8 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-from .esi import ESIClient
+from . import auth
+from .esi import ESIClient, is_structure
 from . import storage
 
 log = logging.getLogger(__name__)
@@ -49,6 +50,23 @@ def collect(items: dict[str, int], markets: dict[str, dict], region_overrides: d
             region = region_overrides.get(name, m["region_id"])
             jobs.setdefault((region, type_id), []).append(m["station_id"])
 
+    # Citadel hubs: with a login, read the structure's full market once (includes orders the
+    # region book may not show). Without one, fall back to the public regional book.
+    citadel_orders: dict[int, dict[int, list]] = {}
+    citadels = [m["station_id"] for m in markets.values() if is_structure(m["station_id"])]
+    if citadels and snapshots and auth.has_login():
+        token = auth.access_token()
+        for sid in citadels:
+            try:
+                by_type: dict[int, list] = {}
+                for o in client.structure_orders(sid, token):
+                    by_type.setdefault(o["type_id"], []).append(o)
+                citadel_orders[sid] = by_type
+            except Exception as exc:
+                log.warning("citadel %s market not readable (docking access?): %s", sid, exc)
+    elif citadels and snapshots:
+        log.info("Not logged in: citadel snapshots use the public regional order book only.")
+
     def fetch(job):
         region, type_id = job
         hist = client.market_history(type_id, region)
@@ -65,7 +83,8 @@ def collect(items: dict[str, int], markets: dict[str, dict], region_overrides: d
                 continue
             n = storage.upsert_history(conn, region, type_id, hist)
             for station in jobs[(region, type_id)] if snapshots else []:
+                src = citadel_orders[station].get(type_id, []) if station in citadel_orders else orders
                 storage.insert_snapshot(conn, {"taken_at": taken_at, "region_id": region, "location_id": station,
-                                               "type_id": type_id, **summarize_orders(orders, station)})
+                                               "type_id": type_id, **summarize_orders(src, station)})
             log.info("[%d/%d] %s in region %s: %d history rows", i, len(jobs), names[type_id], region, n)
     conn.close()

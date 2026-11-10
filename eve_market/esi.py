@@ -18,17 +18,18 @@ class ESIClient:
         self.session.headers.update({"User-Agent": USER_AGENT, "Accept": "application/json"})
         self.max_retries = max_retries
 
-    def _get(self, path: str, params: dict | None = None) -> requests.Response:
+    def _get(self, path: str, params: dict | None = None, token: str | None = None) -> requests.Response:
         url = f"{BASE_URL}{path}"
+        headers = {"Authorization": f"Bearer {token}"} if token else None
         for attempt in range(self.max_retries + 1):
-            resp = self.session.get(url, params=params, timeout=30)
+            resp = self.session.get(url, params=params, headers=headers, timeout=30)
             # ESI error limiting: back off before we get banned.
             remain = resp.headers.get("X-ESI-Error-Limit-Remain")
             if remain is not None and int(remain) < 10:
                 time.sleep(int(resp.headers.get("X-ESI-Error-Limit-Reset", "60")))
             if resp.status_code == 200:
                 return resp
-            if resp.status_code == 404:
+            if resp.status_code in (401, 403, 404):
                 resp.raise_for_status()
             if resp.status_code in (420, 429, 500, 502, 503, 504) and attempt < self.max_retries:
                 time.sleep(int(resp.headers.get("Retry-After", 2 ** (attempt + 1))))
@@ -54,3 +55,32 @@ class ESIClient:
             params["page"] = page
             orders.extend(self._get(f"/markets/{region_id}/orders", params).json())
         return orders
+
+    # ---- public lookups ----
+    def station(self, station_id: int) -> dict:
+        return self._get(f"/universe/stations/{station_id}").json()
+
+    def system(self, system_id: int) -> dict:
+        return self._get(f"/universe/systems/{system_id}").json()
+
+    def regions(self) -> list[int]:
+        """Known-space region IDs (no wormhole or abyssal regions)."""
+        return [r for r in self._get("/universe/regions").json() if r < 11000000]
+
+    # ---- need a logged-in character (see auth.py) ----
+    def structure(self, structure_id: int, token: str) -> dict:
+        """Name and solar system of a player-owned structure the character can dock at."""
+        return self._get(f"/universe/structures/{structure_id}", token=token).json()
+
+    def structure_orders(self, structure_id: int, token: str) -> list[dict]:
+        """Every live order in a player-owned structure's market, following pagination."""
+        resp = self._get(f"/markets/structures/{structure_id}", {"page": 1}, token=token)
+        orders = resp.json()
+        for page in range(2, int(resp.headers.get("X-Pages", "1")) + 1):
+            orders.extend(self._get(f"/markets/structures/{structure_id}", {"page": page}, token=token).json())
+        return orders
+
+
+def is_structure(location_id: int) -> bool:
+    """NPC stations have IDs around 60,000,000; player structures are above 1,000,000,000,000."""
+    return location_id >= 1_000_000_000_000

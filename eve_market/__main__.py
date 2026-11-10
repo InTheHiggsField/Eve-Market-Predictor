@@ -4,6 +4,8 @@
     python -m eve_market backtest             # walk-forward evaluation of the models
     python -m eve_market forecast             # predicted % change over the horizon, per item
     python -m eve_market backfill             # older history (back to 2003) from the EVE Ref archive
+    python -m eve_market login                # log in a character (citadel markets)
+    python -m eve_market hubs --security low  # where the tracked items trade, incl. citadels
     python -m eve_market dashboard            # local website at http://127.0.0.1:5000
 """
 from __future__ import annotations
@@ -46,6 +48,12 @@ def main(argv: list[str] | None = None) -> None:
     b.add_argument("--market", nargs="+", choices=MARKETS, default=list(MARKETS), help="hubs to backfill (default: all)")
     b.add_argument("--force", action="store_true", help="re-fetch days already backfilled")
 
+    sub.add_parser("login", help="log in an EVE character (needed for citadel markets)")
+    sub.add_parser("whoami", help="show the logged-in character")
+    h = sub.add_parser("hubs", help="rank where the tracked items trade, including citadels")
+    h.add_argument("--security", choices=["high", "low", "null"], help="only show this security band")
+    h.add_argument("--top", type=int, default=80)
+
     d = sub.add_parser("dashboard", help="serve the local dashboard")
     d.add_argument("--port", type=int, default=5000)
     d.add_argument("--host", default="127.0.0.1")
@@ -56,6 +64,20 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.cmd == "collect":
         collect(ITEM_LISTS[args.list], {m: MARKETS[m] for m in args.market}, REGION_OVERRIDES, args.db, not args.no_snapshots)
+        return
+
+    if args.cmd in ("login", "whoami"):
+        from . import auth
+        try:
+            tok = auth.login() if args.cmd == "login" else auth.load_token()
+            print(f"Logged in as {tok['character_name']} ({tok['character_id']}), scopes: {', '.join(tok['scopes']) if isinstance(tok['scopes'], list) else tok['scopes']}")
+        except auth.NotLoggedIn as exc:
+            print(exc)
+        return
+
+    if args.cmd == "hubs":
+        from .hubs import print_hubs, scan
+        print_hubs(scan(top=args.top), args.security)
         return
 
     if args.cmd == "backfill":
