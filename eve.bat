@@ -1,0 +1,3 @@
+@echo off
+rem Runs the market tool with the project virtualenv, no activation needed:  eve collect, eve login, ...
+"%~dp0.venv\Scripts\python.exe" -m eve_market %*
