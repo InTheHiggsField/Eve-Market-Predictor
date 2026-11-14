@@ -123,3 +123,4 @@ tbody tr.selected { background: var(--accent-soft); }
 .prose pre code { border: 0; padding: 0; background: none; }
 .prose table td, .prose table th { cursor: default; }
 .loading { color: var(--muted); padding: 30px; text-align: center; }
+.site-foot { max-width: 1400px; margin: 0 auto; padding: 18px 24px 30px; font-size: 12px; }

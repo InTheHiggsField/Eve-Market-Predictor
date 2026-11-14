@@ -1,5 +1,5 @@
 """Command line entry point.
-
+    This is the main workflow.
     python -m eve_market collect              # fetch history + order snapshots for the watchlist
     python -m eve_market backtest             # walk-forward evaluation of the models
     python -m eve_market forecast             # predicted % change over the horizon, per item
@@ -8,6 +8,7 @@
     python -m eve_market hubs --security low  # where the tracked items trade, incl. citadels
     python -m eve_market health               # market health score and warning flags per item
     python -m eve_market dashboard            # local website at http://127.0.0.1:5000
+    python -m eve_market site                 # static copy of the dashboard in site/ (for GitHub Pages)
 """
 from __future__ import annotations
 
@@ -73,6 +74,11 @@ def main(argv: list[str] | None = None) -> None:
     d.add_argument("--port", type=int, default=5000)
     d.add_argument("--host", default="127.0.0.1")
 
+    st = sub.add_parser("site", help="build a static copy of the dashboard (for GitHub Pages)")
+    st.add_argument("--out", default="site", help="output folder (default: site)")
+    st.add_argument("--refresh-hours", type=float, default=6, help="how often the site is rebuilt, shown in the footer")
+    st.add_argument("--market", nargs="+", choices=MARKETS, help="only these hubs (default: all)")
+
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     pd.set_option("display.width", 160, "display.max_rows", 200)
@@ -109,6 +115,11 @@ def main(argv: list[str] | None = None) -> None:
     if args.cmd == "health":
         from eve_market.health import health_table, print_health
         print_health(health_table(storage.connect(args.db), args.market, args.list, args.min_isk))
+        return
+
+    if args.cmd == "site":
+        from eve_market.site import build_site
+        build_site(args.out, args.db, args.refresh_hours, markets=args.market)
         return
 
     if args.cmd == "dashboard":

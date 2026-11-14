@@ -248,3 +248,30 @@ def test_collect_keeps_depth_and_raw_orders(tmp_path):
     storage.insert_raw_orders(conn, "2026-01-01T00:00:00Z", 1, 34, near_touch(orders, 0.2))
     assert len(storage.read_raw_orders(conn, 1)) == 2
     assert storage.prune_raw_orders(conn, 90) == 2           # long past the retention window
+
+
+def test_static_site_build(tmp_path):
+    import json
+
+    from data_sets.tracked_items import TRACKED_ITEMS
+    from eve_market.site import build_site
+    hist = _synthetic_history(n_items=3)
+    hist["volume"] = 10 ** 8
+    conn = storage.connect(tmp_path / "d.db")
+    ids = list(TRACKED_ITEMS.items())[1:4]  # skip PLEX, which reads its own global region
+    storage.save_type_names(conn, dict(ids))
+    for (name, tid), (_, g) in zip(ids, hist.groupby("type_id")):
+        storage.upsert_history(conn, 10000002, tid, g.assign(date=g["date"].dt.strftime("%Y-%m-%d")).to_dict("records"))
+    conn.close()
+    out = build_site(tmp_path / "site", tmp_path / "d.db", markets=["Jita"])
+    for page in ("index.html", "predictions.html", "health.html", "about.html", "static/common.js", ".nojekyll"):
+        assert (out / page).exists(), page
+    html = (out / "index.html").read_text(encoding="utf-8")
+    assert 'href="static/style.css"' in html and 'href="predictions.html"' in html and "window.EVE_STATIC = true" in html
+    assert len(json.loads((out / "data/items/Jita.json").read_text())) == 3
+    assert (out / f"data/history/{ids[0][1]}/Jita.json").exists()
+    pred = json.loads((out / "data/predictions/Jita/core-ridge-7.json").read_text())
+    assert len(pred["items"]) == 3
+    # The local Flask dashboard keeps its own links.
+    from eve_market.dashboard import create_app
+    assert 'href="/predictions"' in create_app(tmp_path / "d.db").test_client().get("/").get_data(as_text=True)

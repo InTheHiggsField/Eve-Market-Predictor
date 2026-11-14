@@ -111,7 +111,7 @@ function renderAll() { renderSummary(); renderTable(); renderScatter(); renderSc
 async function load() {
   document.querySelector("#tbl tbody").innerHTML = `<tr><td colspan="18" class="loading">Loading…</td></tr>`;
   try {
-    data = await getJSON(`/api/health?market=${encodeURIComponent(currentMarket())}`);
+    data = await getJSON(apiUrl("health", { market: currentMarket() }));
     renderAll();
   } catch (e) {
     document.querySelector("#tbl tbody").innerHTML = `<tr><td colspan="18" class="down">Could not load health data: ${esc(e.message)}</td></tr>`;

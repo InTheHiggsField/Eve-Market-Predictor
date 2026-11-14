@@ -1,9 +1,10 @@
 """Local dashboard: Flask app serving three pages plus a JSON API over market.db.
-
+    If you don't want to update the data, you can just run this dashboard
     python -m eve_market dashboard          # then open http://127.0.0.1:5000
 """
 from __future__ import annotations
 
+import socket
 import threading
 from contextlib import closing
 from functools import lru_cache
@@ -11,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from flask import Flask, abort, jsonify, render_template, request
+from flask import Flask, abort, jsonify, render_template, request, url_for
 
 from eve_market import storage
 from eve_market.config import DEFAULT_MARKET, ITEM_GROUPS, ITEM_LISTS, MARKETS, REGION_OVERRIDES, load_history
@@ -24,8 +25,24 @@ LIST_OF = {name: lst for lst in ("core", "commodities") for name in ITEM_LISTS[l
 _lock = threading.Lock()  # sklearn fits are CPU heavy; don't run two at once
 
 
-def create_app(db_path: str | Path = storage.DEFAULT_DB) -> Flask:
+# Page file names in the static (GitHub Pages) export; the Flask app serves them at /, /predictions, ...
+PAGES = {"market": "index.html", "predictions": "predictions.html", "health": "health.html", "about": "about.html"}
+
+
+def create_app(db_path: str | Path = storage.DEFAULT_DB, static_export: dict | None = None) -> Flask:
+    """`static_export` (used by eve_market.site) renders pages for a static host: relative links, and
+    the JavaScript reads prebuilt JSON files instead of calling /api. Its keys go to the templates."""
     app = Flask(__name__, template_folder=str(HERE / "templates"), static_folder=str(HERE / "static"))
+
+    @app.context_processor
+    def links():
+        if static_export is None:
+            return {"static_export": None, "page_url": lambda p: "/" if p == "market" else f"/{p}",
+                    "asset": lambda f: url_for("static", filename=f)}
+        return {"static_export": static_export, "page_url": lambda p: PAGES[p], "asset": lambda f: f"static/{f}"}
+    # Pick up edits to templates and static files on the next page load, without a restart.
+    app.config["TEMPLATES_AUTO_RELOAD"] = True
+    app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
     def conn():
         return closing(storage.connect(db_path))
@@ -172,20 +189,30 @@ def _num(x):
     return None if x is None or (isinstance(x, float) and np.isnan(x)) else float(x)
 
 
-@lru_cache(maxsize=32)
-def _predictions(db_path: str, market: str, list_name: str, model_name: str, horizon: int, _stamp: str) -> dict:
+@lru_cache(maxsize=8)
+def _regional(db_path: str, market: str, list_name: str, horizon: int, _stamp: str):
+    """Features and the walk-forward backtest, shared by every model (the backtest scores all of them)."""
     with closing(storage.connect(db_path)) as c:
         hist = load_history(c, list_name, market)
         station = storage.read_station_prices(c, MARKETS[market]["station_id"], list(ITEM_LISTS[list_name].values()))
-    feats, excluded = apply_health_floor(build_features(hist, horizon))
+    try:
+        feats, excluded = apply_health_floor(build_features(hist, horizon))
+    except ValueError:  # no item on this list has enough history at this hub yet
+        return pd.DataFrame(), [], station, None, None
+    if feats.empty:
+        return feats, excluded, station, None, None
+    metrics, oos = backtest(feats, horizon, return_predictions=True)
+    return feats, excluded, station, metrics, oos
+
+
+@lru_cache(maxsize=32)
+def _predictions(db_path: str, market: str, list_name: str, model_name: str, horizon: int, _stamp: str) -> dict:
+    feats, excluded, station, metrics, oos = _regional(db_path, market, list_name, horizon, _stamp)
     empty = {"market": market, "list": list_name, "model": model_name, "horizon": horizon, "summary": [], "folds": [],
              "items": [], "excluded": excluded, "min_isk": DEFAULT_MIN_ISK,
              "station": {"name": MARKETS[market]["station"], "ready": False, "days": 0, "needed": MIN_STATION_DAYS,
                          "summary": None}}
-    if feats.empty:
-        return empty
-    metrics, oos = backtest(feats, horizon, return_predictions=True)
-    if metrics.empty:
+    if feats.empty or metrics is None or metrics.empty:
         return empty
     summary = (metrics.groupby("model")[["mae", "direction_acc"]].mean()
                .reindex(["no_change", "momentum", "ridge", "gbm"]).reset_index())
@@ -252,6 +279,12 @@ def _predictions(db_path: str, market: str, list_name: str, model_name: str, hor
                     "needed": MIN_STATION_DAYS, "summary": st_summary},
     }
 
-
+#This sets the port you will run the server on. 0nce we have a domain this will change.
 def run(host: str = "127.0.0.1", port: int = 5000, db_path=storage.DEFAULT_DB) -> None:
+    # Windows lets a second server listen on a port that is already taken, and the old one keeps
+    # answering, so edits never seem to show up. Refuse to start instead.
+    with socket.socket() as probe:
+        if probe.connect_ex((host, port)) == 0:
+            raise SystemExit(f"Port {port} is already in use, probably by an older dashboard that is still running. "
+                             f"Close it first, or start this one with --port {port + 1}.")
     create_app(db_path).run(host=host, port=port, debug=False)

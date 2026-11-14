@@ -115,7 +115,7 @@ function renderStationStatus() {
     el.innerHTML = `<b>Station model active</b> for ${esc(s.name)} (${s.days} days of snapshots). Station forecasts below come from it: ` +
       `error ${fmtPct((sel.mae / base - 1) * 100)} vs. no change, direction right ${(sel.direction_acc * 100).toFixed(0)}% of the time.`;
   } else {
-    el.innerHTML = `<b>Station prices:</b> collecting hourly order-book snapshots at ${esc(s.name)} ` +
+    el.innerHTML = `<b>Station prices:</b> collecting order-book snapshots at ${esc(s.name)} ` +
       `(${s.days} of ${s.needed} days so far). Until then, each station forecast applies the regional forecast to the station's current mid price.`;
   }
 }
@@ -124,7 +124,7 @@ function renderExcluded() {
   const el = document.getElementById("excluded"), ex = data.excluded || [];
   el.hidden = !ex.length;
   el.innerHTML = `<b>Left out as illiquid</b> (under ${fmtIsk(data.min_isk)} ISK traded a day in ${esc(data.market)}): ${ex.map(esc).join(", ")}. ` +
-    `A forecast there would be smaller than the cost of trading. See the <a href="/health">Health page</a>.`;
+    `A forecast there would be smaller than the cost of trading. See the <a href="${window.EVE_PAGES.health}">Health page</a>.`;
 }
 
 function renderAll() {
@@ -142,10 +142,10 @@ function renderAll() {
 async function load() {
   const my = ++reqId;
   document.getElementById("h-label").textContent = state.horizon;
-  document.querySelector("#summary").innerHTML = `<tbody><tr><td class="loading">Training models… (a few seconds)</td></tr></tbody>`;
+  document.querySelector("#summary").innerHTML = `<tbody><tr><td class="loading">${window.EVE_STATIC ? "Loading…" : "Training models… (a few seconds)"}</td></tr></tbody>`;
   document.getElementById("cards").style.opacity = .4;
   try {
-    const d = await getJSON(`/api/predictions?market=${encodeURIComponent(currentMarket())}&list=${state.list}&model=${state.model}&horizon=${state.horizon}`);
+    const d = await getJSON(apiUrl("predictions", { market: currentMarket(), list: state.list, model: state.model, horizon: state.horizon }));
     if (my !== reqId) return;
     data = d;
     const sel = document.getElementById("group"), groups = [...new Set(data.items.map(i => i.group))];

@@ -75,9 +75,9 @@ async function select(typeId) {
     `<span>Avg <b>${fmtIsk(item.price)}</b></span><span>7d <b class="${pctClass(item.chg_7d)}">${fmtPct(item.chg_7d)}</b></span>` +
     `<span>Bid/ask <b>${fmtIsk(item.best_bid)} / ${fmtIsk(item.best_ask)}</b></span><span>ISK/day <b>${fmtIsk(item.isk_30d)}</b></span>`;
   const key = currentMarket() + ":" + typeId;
-  historyCache[key] ||= await getJSON(`/api/history/${typeId}?market=${encodeURIComponent(currentMarket())}`);
+  historyCache[key] ||= await getJSON(apiUrl(`history/${typeId}`, { market: currentMarket() }));
   if (state.selected === typeId) renderDetail();
-  stationCache[key] ||= await getJSON(`/api/station/${typeId}?market=${encodeURIComponent(currentMarket())}`);
+  stationCache[key] ||= await getJSON(apiUrl(`station/${typeId}`, { market: currentMarket() }));
   if (state.selected === typeId) renderStation(stationCache[key]);
 }
 
@@ -85,8 +85,8 @@ let stationChart, stationCache = {};
 function renderStation(s) {
   document.getElementById("station-title").textContent = `Station order book: ${s.station}`;
   document.getElementById("station-note").textContent = s.times.length < 2
-    ? `${s.times.length} snapshot so far; the hourly task adds one every hour`
-    : `${s.times.length} hourly snapshots`;
+    ? `${s.times.length} snapshot so far; a new one is added at every refresh`
+    : `${s.times.length} snapshots`;
   stationChart?.destroy();
   const up = css("--up"), down = css("--down"), accent = css("--accent");
   stationChart = new Chart(document.getElementById("station-chart"), {

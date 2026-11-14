@@ -49,4 +49,4 @@
   <p class="muted" style="margin:10px 0 0;font-size:12px">Region avg is the daily average of every trade in the hub's region. Station mid is the midpoint of the best 5% of buy and sell volume at the hub station right now, and Premium is how far it sits from the region average. Volume, ISK/day and trades/day are 30-day averages. Bid/ask come from the latest order snapshot at the selected hub's main station. Click a column to sort, click a row to chart it.</p>
 </div>
 {% endblock %}
-{% block scripts %}<script src="{{ url_for('static', filename='market.js') }}"></script>{% endblock %}
+{% block scripts %}<script src="{{ asset('market.js') }}"></script>{% endblock %}
