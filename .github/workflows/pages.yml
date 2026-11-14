@@ -1,0 +1,77 @@
+# Collects public market data, rebuilds the static dashboard and publishes it to GitHub Pages.
+# Uses only public ESI and EVE Ref endpoints: no login, no secrets.
+# The SQLite database is carried between runs in the Actions cache. If the cache is lost (unused for 7 days),
+# the next run rebuilds it with a backfill from BACKFILL_START, which takes longer.
+name: Publish dashboard
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"   # every 6 hours (UTC); GitHub may start scheduled runs a little late
+  workflow_dispatch:          # "Run workflow" button on the Actions tab
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  # First day of history to backfill from the EVE Ref archive. Override with a repository variable.
+  BACKFILL_START: ${{ vars.BACKFILL_START || '2022-01-01' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore market database
+        uses: actions/cache/restore@v4
+        with:
+          path: data/market.db
+          key: market-db-${{ github.run_id }}
+          restore-keys: market-db-
+
+      - name: Backfill older history (only fetches missing days)
+        run: python -m eve_market backfill --start "$BACKFILL_START" --workers 6
+
+      - name: Collect latest history and order snapshots
+        run: python -m eve_market collect
+
+      - name: Save market database
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/market.db
+          key: market-db-${{ github.run_id }}
+
+      - name: Build static site
+        run: python -m eve_market site --out site --refresh-hours 6
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

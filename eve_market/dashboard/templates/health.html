@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Market health · EVE Market Predictor{% endblock %}
+{% block content %}
+<h1>Market health</h1>
+<p class="sub" id="asof">How tradeable each item is at this hub: can you trade real size, quickly, near fair value, without moving the price?</p>
+
+<div class="controls">
+  <label>List
+    <span class="seg" id="list-seg">
+      <button data-v="all" class="on">All</button><button data-v="core">Core</button><button data-v="commodities">Commodities</button>
+    </span>
+  </label>
+  <label>Show
+    <span class="seg" id="label-seg">
+      <button data-v="" class="on">All</button><button data-v="Healthy">Healthy</button><button data-v="Thin">Thin</button><button data-v="Illiquid">Illiquid</button>
+    </span>
+  </label>
+  <label>Search <input type="search" id="search" placeholder="Item name"></label>
+</div>
+
+<div id="summary" class="note" hidden style="border-left-color: var(--accent)"></div>
+
+<div class="grid-2">
+  <div class="panel">
+    <div class="card-head"><h2>Liquidity vs. cost of trading</h2><span class="muted" style="font-size:12px" id="scatter-note"></span></div>
+    <div class="chart-box" style="height:380px"><canvas id="scatter"></canvas></div>
+    <p class="muted" style="font-size:12px;margin:10px 0 0">Each dot is an item. Right is more ISK traded per day; down is a tighter spread. The dashed line is the rough cost of a round trip in fees and tax (about 5%): below it only patient orders pay, above it there is room to trade the spread but taking prices is expensive.</p>
+  </div>
+  <div class="panel">
+    <div class="card-head"><h2>Health score</h2></div>
+    <div class="scroll-box" style="height:400px"><div class="chart-box"><canvas id="score-chart"></canvas></div></div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="table-wrap">
+    <table id="tbl">
+      <thead><tr>
+        <th data-k="name">Item</th>
+        <th data-k="score" class="num" title="Average percentile of turnover, price impact, implied spread, trade activity, quoted spread and depth, ranked across every item at every hub">Score</th>
+        <th data-k="label">Health</th>
+        <th data-k="isk_turnover" class="num" title="Median ISK traded per day, last 30 days">ISK/day</th>
+        <th data-k="trades" class="num" title="Median number of trades per day, last 30 days">Trades/day</th>
+        <th data-k="zero_days" class="num" title="Share of the last 30 days with no trade at all">No-trade days</th>
+        <th data-k="quoted_spread" class="num" title="(best ask - best bid) / mid at the hub station, median of recent hourly snapshots">Spread</th>
+        <th data-k="effective_spread" class="num" title="Spread between the best 5% of ask volume and the best 5% of bid volume: what a real-sized trade pays">Eff. spread</th>
+        <th data-k="depth" class="num" title="ISK resting within 5% of the best price, on the thinner side of the book">Depth</th>
+        <th data-k="imbalance" class="num" title="(bid depth - ask depth) / total. Positive means more buying interest near the top of the book">Imbalance</th>
+        <th data-k="amihud" class="num" title="Amihud illiquidity: typical % price move per billion ISK traded. Lower is better">Impact /B</th>
+        <th data-k="roll_spread" class="num" title="Roll estimate: the spread implied by how much the daily average bounces back and forth">Implied spread</th>
+        <th data-k="volatility" class="num" title="Annualized volatility of daily returns, last 90 days, outlier prints clipped">Volatility</th>
+        <th data-k="bounce" class="num" title="Lag-1 autocorrelation of daily returns. Strongly negative means the daily average is bouncing between bid and ask, not really reverting">Bounce</th>
+        <th data-k="hub_gap" class="num" title="Typical price difference from Jita over the last 30 days">Gap vs Jita</th>
+        <th data-k="top_share" class="num" title="Share of the ISK near the top of the book held by the single largest order (worse side)">Top order</th>
+        <th data-k="churn" class="num" title="Share of orders near the top of the book placed or repriced within the last hour">Churn</th>
+        <th>Warnings</th>
+      </tr></thead>
+      <tbody><tr><td colspan="18" class="loading">Loading…</td></tr></tbody>
+    </table>
+  </div>
+  <p class="muted" style="margin:10px 0 0;font-size:12px">The score ranks items across all hubs, so a thin hub is not graded on a curve. Items trading under {{ "%g"|format(min_isk / 1e9) }}B ISK a day are marked Illiquid whatever their score and are left out of the prediction models. Spread, depth, imbalance, top order and churn come from the hourly station snapshots and fill in as they accumulate. Hover a column heading for its definition; the About page explains each metric.</p>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ asset('health.js') }}"></script>{% endblock %}

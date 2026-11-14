@@ -226,3 +226,4 @@ data/
 .env
 esi_token.json
 keys.json
+site/

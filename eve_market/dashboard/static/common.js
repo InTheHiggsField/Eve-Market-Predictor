@@ -36,6 +36,18 @@ function sparkline(values, w = 90, h = 24) {
   return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><polyline fill="none" stroke="${color}" stroke-width="1.5" points="${pts.join(" ")}"/></svg>`;
 }
 
+// API address. The local Flask dashboard answers /api/...; the static GitHub Pages build has the same
+// answers prebuilt as data/<path>/<market>[/<other params joined by ->].json (see eve_market/site.py).
+function apiUrl(path, params = {}) {
+  if (!window.EVE_STATIC) {
+    const q = new URLSearchParams(params).toString();
+    return `/api/${path}` + (q ? "?" + q : "");
+  }
+  const { market, ...rest } = params;
+  const extra = Object.values(rest).map(String);
+  return `data/${path}/${encodeURIComponent(market)}` + (extra.length ? "/" + extra.join("-") : "") + ".json";
+}
+
 async function getJSON(url) {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`${url}: ${r.status}`);
@@ -65,7 +77,7 @@ function initMarketPicker(onChange) {
 }
 
 let _itemsPromise = null;
-function loadItems() { return _itemsPromise ||= getJSON(`/api/items?list=all&market=${encodeURIComponent(currentMarket())}`); }
+function loadItems() { return _itemsPromise ||= getJSON(apiUrl("items", { market: currentMarket() })); }
 
 async function initTicker() {
   const el = document.getElementById("ticker");
@@ -78,6 +90,6 @@ async function initTicker() {
     el.innerHTML = html;
     el.style.setProperty("--ticker-duration", Math.max(40, items.length * 3.5) + "s");
   } catch (e) {
-    el.innerHTML = `<span class="down">Could not load market data. Run <code>python -m eve_market collect</code>.</span>`;
+    el.innerHTML = `<span class="down">Could not load market data.${window.EVE_STATIC ? "" : " Run <code>python -m eve_market collect</code>."}</span>`;
   }
 }

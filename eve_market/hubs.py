@@ -13,8 +13,8 @@ import logging
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
-from . import auth
-from .esi import ESIClient, is_structure
+from eve_market import auth
+from eve_market.esi import ESIClient, is_structure
 
 log = logging.getLogger(__name__)
 

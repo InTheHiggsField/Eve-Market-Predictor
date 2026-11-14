@@ -5,9 +5,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}EVE Market Predictor{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="{{ asset('style.css') }}">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  <script src="{{ url_for('static', filename='common.js') }}"></script>
+  <script>window.EVE_STATIC = {{ 'true' if static_export else 'false' }}; window.EVE_PAGES = {{ {'market': page_url('market'), 'predictions': page_url('predictions'), 'health': page_url('health'), 'about': page_url('about')} | tojson }};</script>
+  <script src="{{ asset('common.js') }}"></script>
 </head>
 <body>
   <div class="ticker" aria-label="Market ticker"><span class="ticker-label" id="ticker-label"></span><div class="ticker-wrap"><div class="ticker-track" id="ticker"><span class="muted">Loading market…</span></div></div></div>
@@ -21,12 +22,14 @@
     </label>
     {% endif %}
     <nav>
-      <a href="/" class="{{ 'active' if page == 'market' }}">Market data</a>
-      <a href="/predictions" class="{{ 'active' if page == 'predictions' }}">Predictions</a>
-      <a href="/about" class="{{ 'active' if page == 'about' }}">About</a>
+      <a href="{{ page_url('market') }}" class="{{ 'active' if page == 'market' }}">Market data</a>
+      <a href="{{ page_url('predictions') }}" class="{{ 'active' if page == 'predictions' }}">Predictions</a>
+      <a href="{{ page_url('health') }}" class="{{ 'active' if page == 'health' }}">Health</a>
+      <a href="{{ page_url('about') }}" class="{{ 'active' if page == 'about' }}">About</a>
     </nav>
   </header>
   <main>{% block content %}{% endblock %}</main>
+  {% if static_export %}<footer class="site-foot muted">Static snapshot built {{ static_export.built_at }} from public ESI data, refreshed about every {{ static_export.refresh_hours }} hours. Not affiliated with CCP Games. <a href="{{ static_export.repo_url }}" target="_blank" rel="noopener">Source on GitHub</a>.</footer>{% endif %}
   <script>initTicker();</script>
   {% block scripts %}{% endblock %}
 </body>

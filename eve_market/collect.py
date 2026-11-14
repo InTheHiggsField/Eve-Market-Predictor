@@ -5,9 +5,8 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-from . import auth
-from .esi import ESIClient, is_structure
-from . import storage
+from eve_market import auth, storage
+from eve_market.esi import ESIClient, is_structure
 
 log = logging.getLogger(__name__)
 

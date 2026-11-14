@@ -3,7 +3,7 @@ import pandas as pd
 
 from eve_market import storage
 from eve_market.collect import summarize_orders
-from eve_market.forecast import FEATURES, backtest, build_features, predict_latest
+from eve_market.forecast import backtest, build_features, predict_latest
 
 
 def test_summarize_orders_filters_station():
@@ -58,6 +58,7 @@ def test_storage_roundtrip(tmp_path):
 def test_dashboard_api(tmp_path):
     from eve_market.dashboard import create_app
     hist = _synthetic_history(n_items=3)
+    hist["volume"] = 10 ** 8  # liquid enough to clear the health floor
     conn = storage.connect(tmp_path / "d.db")
     from data_sets.tracked_items import TRACKED_ITEMS
     ids = list(TRACKED_ITEMS.items())[:3]
@@ -67,13 +68,16 @@ def test_dashboard_api(tmp_path):
         storage.upsert_history(conn, 10000002, tid, rows)
     conn.close()
     client = create_app(tmp_path / "d.db").test_client()
-    for page in ("/", "/predictions", "/about"):
+    for page in ("/", "/predictions", "/health", "/about"):
         assert client.get(page).status_code == 200
     items = client.get("/api/items?list=core").get_json()
     assert len(items) == 3 and all(i["price"] > 0 for i in items)
     assert client.get(f"/api/history/{ids[0][1]}").status_code == 200
     pred = client.get("/api/predictions?list=core&model=ridge&horizon=7").get_json()
     assert len(pred["items"]) == 3 and {r["model"] for r in pred["summary"]} == {"no_change", "momentum", "ridge", "gbm"}
+    assert pred["excluded"] == []
+    health = client.get("/api/health").get_json()
+    assert len(health["items"]) == 3 and all(i["label"] in ("Healthy", "Thin", "Illiquid") for i in health["items"])
 
 
 def test_backfill_trims_to_tracked_items():
@@ -187,3 +191,87 @@ def test_top_pct_price_ignores_lowball_bids():
     from eve_market.collect import _top_pct_price
     bids = [{"price": 4.8e6, "volume_remain": 100}, {"price": 4.0e4, "volume_remain": 1_000_000}]
     assert _top_pct_price(bids, highest_first=True) == 4.8e6
+
+
+def test_clean_log_price_clips_a_print_without_lookahead():
+    from eve_market.forecast import clean_log_price
+    logp = pd.Series(np.log(100.0), index=range(60)) + np.random.default_rng(0).normal(0, 0.01, 60)
+    spiked = logp.copy()
+    spiked[40] += np.log(5)  # one fat-finger day at 5x
+    clean = clean_log_price(spiked)
+    assert clean[40] < logp[40] + 0.35 and np.allclose(clean.drop(40), logp.drop(40))
+    # causal: changing a later day never changes an earlier cleaned value
+    assert np.allclose(clean_log_price(spiked.iloc[:41]), clean.iloc[:41])
+
+
+def test_health_floor_drops_thin_items():
+    from eve_market.forecast import apply_health_floor
+    hist = _synthetic_history(n_items=3)
+    hist.loc[hist.type_id == 2, "volume"] = 1  # item2 trades ~100 ISK a day
+    feats = build_features(hist, horizon=7)
+    kept, excluded = apply_health_floor(feats, min_isk=50_000)
+    assert excluded == ["item2"] and set(kept.type_id) == {0, 1}
+    assert apply_health_floor(feats, 0)[1] == []
+
+
+def test_health_metrics_and_score():
+    from eve_market import health
+    hist = _synthetic_history(n_items=6, n_days=200)
+    hist.loc[hist.type_id == 5, "volume"] = 1          # thin item
+    m = health.history_metrics(hist)
+    assert {"isk_turnover", "amihud", "roll_spread", "volatility", "bounce", "zero_days"} <= set(m.columns)
+    assert 0.2 < m.loc[0, "volatility"] < 0.6          # 2% daily vol is about 38% a year
+    snaps = pd.DataFrame({"type_id": [0, 0], "best_bid": [98, 99], "best_ask": [102, 101], "bid_top5": [98, 99],
+                          "ask_top5": [102, 101], "bid_depth": [300.0, 100.0], "ask_depth": [100.0, 100.0]})
+    s = health.snapshot_metrics(snaps)
+    assert np.isclose(s.loc[0, "quoted_spread"], 0.03) and s.loc[0, "depth"] == 100 and s.loc[0, "imbalance"] == 0.25
+    orders = pd.DataFrame({"taken_at": "2026-01-01T12:00:00Z", "type_id": 0, "order_id": [1, 2, 3, 4],
+                           "is_buy": [0, 0, 0, 1], "price": [100, 101, 200, 90], "volume_remain": [9, 1, 50, 5],
+                           "issued": ["2026-01-01T11:30:00Z", "2025-12-01T00:00:00Z", "2025-12-01T00:00:00Z",
+                                      "2025-12-01T00:00:00Z"]})
+    b = health.book_metrics(orders)   # the 200 ISK sell order is outside the 5% band
+    assert b.loc[0, "top_share"] == 1.0 and np.isclose(b.loc[0, "churn"], 1 / 3)
+    scored = health.score(m.reset_index().assign(market="x"), min_isk=50_000)
+    thin = scored[scored.type_id == 5].iloc[0]
+    assert thin["label"] == "Illiquid" and thin["score"] < scored["score"].max()
+
+
+def test_collect_keeps_depth_and_raw_orders(tmp_path):
+    from eve_market.collect import near_touch
+    orders = [{"order_id": 1, "location_id": 1, "is_buy_order": True, "price": 100, "volume_remain": 2, "issued": "t"},
+              {"order_id": 2, "location_id": 1, "is_buy_order": True, "price": 50, "volume_remain": 99, "issued": "t"},
+              {"order_id": 3, "location_id": 1, "is_buy_order": False, "price": 110, "volume_remain": 3, "issued": "t"}]
+    s = summarize_orders(orders, 1)
+    assert s["bid_depth"] == 200 and s["ask_depth"] == 330   # the lowball bid is not depth
+    assert [o["order_id"] for o in near_touch(orders, 0.2)] == [1, 3]
+    conn = storage.connect(tmp_path / "r.db")
+    storage.insert_raw_orders(conn, "2026-01-01T00:00:00Z", 1, 34, near_touch(orders, 0.2))
+    assert len(storage.read_raw_orders(conn, 1)) == 2
+    assert storage.prune_raw_orders(conn, 90) == 2           # long past the retention window
+
+
+def test_static_site_build(tmp_path):
+    import json
+
+    from data_sets.tracked_items import TRACKED_ITEMS
+    from eve_market.site import build_site
+    hist = _synthetic_history(n_items=3)
+    hist["volume"] = 10 ** 8
+    conn = storage.connect(tmp_path / "d.db")
+    ids = list(TRACKED_ITEMS.items())[1:4]  # skip PLEX, which reads its own global region
+    storage.save_type_names(conn, dict(ids))
+    for (name, tid), (_, g) in zip(ids, hist.groupby("type_id")):
+        storage.upsert_history(conn, 10000002, tid, g.assign(date=g["date"].dt.strftime("%Y-%m-%d")).to_dict("records"))
+    conn.close()
+    out = build_site(tmp_path / "site", tmp_path / "d.db", markets=["Jita"])
+    for page in ("index.html", "predictions.html", "health.html", "about.html", "static/common.js", ".nojekyll"):
+        assert (out / page).exists(), page
+    html = (out / "index.html").read_text(encoding="utf-8")
+    assert 'href="static/style.css"' in html and 'href="predictions.html"' in html and "window.EVE_STATIC = true" in html
+    assert len(json.loads((out / "data/items/Jita.json").read_text())) == 3
+    assert (out / f"data/history/{ids[0][1]}/Jita.json").exists()
+    pred = json.loads((out / "data/predictions/Jita/core-ridge-7.json").read_text())
+    assert len(pred["items"]) == 3
+    # The local Flask dashboard keeps its own links.
+    from eve_market.dashboard import create_app
+    assert 'href="/predictions"' in create_app(tmp_path / "d.db").test_client().get("/").get_data(as_text=True)

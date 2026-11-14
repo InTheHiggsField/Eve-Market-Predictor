@@ -18,12 +18,13 @@
 </div>
 
 <div id="verdict" class="note" hidden></div>
+<div id="excluded" class="note" hidden style="border-left-color: var(--warn)"></div>
 <div id="station-status" class="note" hidden style="border-left-color: var(--accent)"></div>
 
 <div class="grid-2">
   <div class="panel">
     <h2>Backtest (5 walk-forward folds of 21 days)</h2>
-    <div class="table-wrap"><table id="summary"><tbody><tr><td class="loading">Training models… (a few seconds)</td></tr></tbody></table></div>
+    <div class="table-wrap"><table id="summary"><tbody><tr><td class="loading">{{ "Loading…" if static_export else "Training models… (a few seconds)" }}</td></tr></tbody></table></div>
     <p class="muted" style="font-size:12px;margin:10px 0 0">MAE is the mean absolute error of the predicted log return (0.05 ≈ 5% off). Direction is how often the predicted sign of the move was right, on days the price actually moved. "No change" always predicts 0%; "momentum" assumes the last move continues.</p>
   </div>
   <div class="panel">
@@ -35,4 +36,4 @@
 
 <div class="cards" id="cards"></div>
 {% endblock %}
-{% block scripts %}<script src="{{ url_for('static', filename='predictions.js') }}"></script>{% endblock %}
+{% block scripts %}<script src="{{ asset('predictions.js') }}"></script>{% endblock %}
