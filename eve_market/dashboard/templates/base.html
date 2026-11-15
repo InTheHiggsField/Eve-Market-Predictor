@@ -5,12 +5,19 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}EVE Market Predictor{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Exo+2:wght@500;600;700&display=swap">
   <link rel="stylesheet" href="{{ asset('style.css') }}">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script>window.EVE_STATIC = {{ 'true' if static_export else 'false' }}; window.EVE_PAGES = {{ {'market': page_url('market'), 'predictions': page_url('predictions'), 'health': page_url('health'), 'about': page_url('about')} | tojson }};</script>
+  <script>window.EVE_BACKDROPS = {{ backdrops | tojson }}; window.EVE_BACKDROP_CREDITS = {{ backdrop_credits | tojson }};</script>
   <script src="{{ asset('common.js') }}"></script>
+  <script>applyFaction(currentMarket());</script>
 </head>
 <body>
+  <div class="backdrop" id="backdrop" aria-hidden="true"><div class="layer nebula on"></div><div class="layer photo"></div><div class="layer photo"></div></div>
+  <div class="backdrop-credit" id="backdrop-credit"></div>
+  <script>setBackdrop(currentMarket());</script>
   <div class="ticker" aria-label="Market ticker"><span class="ticker-label" id="ticker-label"></span><div class="ticker-wrap"><div class="ticker-track" id="ticker"><span class="muted">Loading market…</span></div></div></div>
   <header class="topbar">
     <div class="brand"><span class="logo">◈</span> EVE Market Predictor</div>
@@ -29,7 +36,8 @@
     </nav>
   </header>
   <main>{% block content %}{% endblock %}</main>
-  {% if static_export %}<footer class="site-foot muted">Static snapshot built {{ static_export.built_at }} from public ESI data, refreshed about every {{ static_export.refresh_hours }} hours. Not affiliated with CCP Games. <a href="{{ static_export.repo_url }}" target="_blank" rel="noopener">Source on GitHub</a>.</footer>{% endif %}
+  {% if static_export %}<footer class="site-foot muted">Static snapshot built {{ static_export.built_at }} from public ESI data, refreshed about every {{ static_export.refresh_hours }} hours. <a href="{{ static_export.repo_url }}" target="_blank" rel="noopener">Source on GitHub</a>.</footer>{% endif %}
+  <footer class="site-foot muted">EVE Online and the EVE logo are the registered trademarks of CCP hf. All rights are reserved worldwide. All other trademarks are the property of their respective owners. EVE Online, the EVE logo, EVE and all associated logos and designs are the intellectual property of CCP hf. All artwork, screenshots, characters, vehicles, storylines, world facts or other recognizable features of the intellectual property relating to these trademarks are likewise the intellectual property of CCP hf. This site is not affiliated with or endorsed by CCP Games.</footer>
   <script>initTicker();</script>
   {% block scripts %}{% endblock %}
 </body>

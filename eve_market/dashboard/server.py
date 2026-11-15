@@ -29,6 +29,23 @@ _lock = threading.Lock()  # sklearn fits are CPU heavy; don't run two at once
 PAGES = {"market": "index.html", "predictions": "predictions.html", "health": "health.html", "about": "about.html"}
 
 
+def region_backdrops() -> tuple[dict, dict]:
+    """Background images found in static/img/regions/, as ({market: "img/regions/<file>"}, {market: credit})."""
+    folder = HERE / "static" / "img" / "regions"
+    found = {}
+    if folder.is_dir():
+        files = {p.stem.lower(): p.name for p in sorted(folder.iterdir())
+                 if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")}
+        found = {m: f"img/regions/{files[m.lower()]}" for m in MARKETS if m.lower() in files}
+    credits = {}
+    try:
+        import json
+        credits = json.loads((folder / "credits.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    return found, credits
+
+
 def create_app(db_path: str | Path = storage.DEFAULT_DB, static_export: dict | None = None) -> Flask:
     """`static_export` (used by eve_market.site) renders pages for a static host: relative links, and
     the JavaScript reads prebuilt JSON files instead of calling /api. Its keys go to the templates."""
@@ -37,9 +54,14 @@ def create_app(db_path: str | Path = storage.DEFAULT_DB, static_export: dict | N
     @app.context_processor
     def links():
         if static_export is None:
-            return {"static_export": None, "page_url": lambda p: "/" if p == "market" else f"/{p}",
-                    "asset": lambda f: url_for("static", filename=f)}
-        return {"static_export": static_export, "page_url": lambda p: PAGES[p], "asset": lambda f: f"static/{f}"}
+            ctx = {"static_export": None, "page_url": lambda p: "/" if p == "market" else f"/{p}",
+                   "asset": lambda f: url_for("static", filename=f)}
+        else:
+            ctx = {"static_export": static_export, "page_url": lambda p: PAGES[p], "asset": lambda f: f"static/{f}"}
+        images, credits = region_backdrops()
+        ctx["backdrops"] = {m: ctx["asset"](f) for m, f in images.items()}
+        ctx["backdrop_credits"] = credits
+        return ctx
     # Pick up edits to templates and static files on the next page load, without a restart.
     app.config["TEMPLATES_AUTO_RELOAD"] = True
     app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0

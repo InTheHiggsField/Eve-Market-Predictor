@@ -54,6 +54,34 @@ async function getJSON(url) {
   return r.json();
 }
 
+// Backdrop: each hub's faction tint (see html[data-faction] in style.css) and its background image from
+// static/img/regions/ (window.EVE_BACKDROPS, filled in by the server). Two photo layers cross-fade.
+const FACTIONS = { Jita: "caldari", Amarr: "amarr", Dodixie: "gallente", Hek: "minmatar", Rens: "brutor", Zarzakh: "deathless" };
+function applyFaction(market) { document.documentElement.dataset.faction = FACTIONS[market] || "caldari"; }
+let _backdropToken = 0, _backdropLayer = 0;
+function setBackdrop(market) {
+  applyFaction(market);
+  const bd = document.getElementById("backdrop");
+  if (!bd) return;
+  const photos = bd.querySelectorAll(".layer.photo");
+  const url = (window.EVE_BACKDROPS || {})[market];
+  const credit = document.getElementById("backdrop-credit");
+  const token = ++_backdropToken;
+  const showNebula = () => { photos.forEach(p => p.classList.remove("on")); if (credit) credit.textContent = ""; };
+  if (!url) return showNebula();
+  const img = new Image();
+  img.onload = () => {
+    if (token !== _backdropToken) return;  // the user already picked another market
+    _backdropLayer ^= 1;
+    photos[_backdropLayer].style.backgroundImage = `url("${url}")`;
+    photos[_backdropLayer].classList.add("on");
+    photos[_backdropLayer ^ 1].classList.remove("on");
+    if (credit) credit.textContent = (window.EVE_BACKDROP_CREDITS || {})[market] || "";
+  };
+  img.onerror = () => { if (token === _backdropToken) showNebula(); };
+  img.src = url;
+}
+
 // Selected regional market: ?market= in the URL wins, then the last choice, then Jita.
 function currentMarket() {
   const fromUrl = new URLSearchParams(location.search).get("market");
@@ -71,6 +99,7 @@ function initMarketPicker(onChange) {
     const url = new URL(location.href); url.searchParams.set("market", sel.value);
     history.replaceState(null, "", url);
     _itemsPromise = null;
+    setBackdrop(sel.value);
     initTicker();
     onChange && onChange(sel.value);
   });
