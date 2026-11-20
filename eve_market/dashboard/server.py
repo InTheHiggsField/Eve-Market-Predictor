@@ -15,14 +15,16 @@ import pandas as pd
 from flask import Flask, abort, jsonify, render_template, request, url_for
 
 from eve_market import hauling, storage
-from eve_market.config import DEFAULT_MARKET, ITEM_GROUPS, ITEM_LISTS, MARKETS, REGION_OVERRIDES, load_history
+from eve_market.config import DEFAULT_MARKET, EVERY_ITEM, ITEM_GROUPS, ITEM_LISTS, MARKETS, REGION_OVERRIDES, load_history
 from eve_market.forecast import (DEFAULT_MIN_ISK, DEFAULT_MODEL, FEATURES, MIN_STATION_DAYS,
                                  apply_health_floor, backtest, build_features, build_station_features, fit_model,
                                  make_models, predict_station, station_days)
 from eve_market.health import health_table
 
 HERE = Path(__file__).resolve().parent
-LIST_OF = {name: lst for lst in ("core", "commodities") for name in ITEM_LISTS[lst]}
+# Which selectable lists each item is on (Gila is on both "core" and "faction_ships").
+LIST_NAMES = ("core", "commodities", "faction_ships")
+LISTS_OF = {name: [lst for lst in LIST_NAMES if name in ITEM_LISTS[lst]] for name in EVERY_ITEM}
 _lock = threading.Lock()  # sklearn fits are CPU heavy; don't run two at once
 
 
@@ -88,7 +90,11 @@ def create_app(db_path: str | Path = storage.DEFAULT_DB, static_export: dict | N
             abort(400, f"unknown market {m}")
         return m
 
-    def history(list_name: str, market: str) -> pd.DataFrame:
+    def history(list_name: str | None, market: str) -> pd.DataFrame:
+        """History for one list, or for every tracked item when no list is given."""
+        if list_name is None:
+            with conn() as c:
+                return load_history(c, EVERY_ITEM, market)
         if list_name not in ITEM_LISTS:
             abort(400, f"unknown list {list_name}")
         with conn() as c:
@@ -124,14 +130,15 @@ def create_app(db_path: str | Path = storage.DEFAULT_DB, static_export: dict | N
     def about_page():
         return render_template("about.html", page="about", region_overrides=REGION_OVERRIDES, markets=MARKETS,
                                features=FEATURES, n_core=len(ITEM_LISTS["core"]),
-                               n_commod=len(ITEM_LISTS["commodities"]), min_station_days=MIN_STATION_DAYS,
+                               n_commod=len(ITEM_LISTS["commodities"]), n_faction=len(ITEM_LISTS["faction_ships"]),
+                               min_station_days=MIN_STATION_DAYS,
                                min_isk=DEFAULT_MIN_ISK, hauling=hauling.page_defaults())
 
     # ---------- API ----------
     @app.get("/api/items")
     def api_items():
         market = market_arg()
-        h = history(request.args.get("list", "all"), market)
+        h = history(request.args.get("list"), market)
         snaps = latest_snapshots(market).set_index("type_id")
         out = []
         for type_id, g in h.groupby("type_id"):
@@ -147,7 +154,7 @@ def create_app(db_path: str | Path = storage.DEFAULT_DB, static_export: dict | N
             name = g["name"].iloc[0]
             row = {
                 "type_id": int(type_id), "name": name, "group": ITEM_GROUPS.get(name, ""),
-                "list": LIST_OF.get(name, ""), "date": g["date"].iloc[-1].strftime("%Y-%m-%d"),
+                "lists": LISTS_OF.get(name, []), "date": g["date"].iloc[-1].strftime("%Y-%m-%d"),
                 "price": float(last), "chg_1d": chg(1), "chg_7d": chg(7), "chg_30d": chg(30),
                 "volume_30d": float(g30["volume"].mean()),
                 "isk_30d": float((g30["average"] * g30["volume"]).mean()),
@@ -171,7 +178,7 @@ def create_app(db_path: str | Path = storage.DEFAULT_DB, static_export: dict | N
 
     @app.get("/api/history/<int:type_id>")
     def api_history(type_id: int):
-        h = history("all", market_arg())
+        h = history(None, market_arg())
         g = h[h["type_id"] == type_id].sort_values("date")
         if g.empty:
             abort(404)
@@ -199,14 +206,14 @@ def create_app(db_path: str | Path = storage.DEFAULT_DB, static_export: dict | N
     @app.get("/api/health")
     def api_health():
         market = market_arg()
-        list_name = request.args.get("list", "all")
-        if list_name not in ITEM_LISTS:
+        list_name = request.args.get("list")
+        if list_name is not None and list_name not in ITEM_LISTS:
             abort(400, f"unknown list {list_name}")
         with conn() as c:
-            df = health_table(c, market, list_name)
+            df = health_table(c, market, EVERY_ITEM if list_name is None else list_name)
         df = df.astype(object).where(df.notna(), None) if not df.empty else df
         return jsonify({"market": market, "min_isk": DEFAULT_MIN_ISK,
-                        "items": [{**r, "list": LIST_OF.get(r["name"], "")} for r in df.to_dict("records")]})
+                        "items": [{**r, "lists": LISTS_OF.get(r["name"], [])} for r in df.to_dict("records")]})
 
     @app.get("/api/predictions")
     def api_predictions():

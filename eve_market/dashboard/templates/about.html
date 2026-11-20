@@ -12,6 +12,7 @@
 <ul>
   <li><b>Core</b> (<code>TRACKED_ITEMS</code>, {{ n_core }} items): PLEX, skill injectors and extractors, Logic Circuits, and the most-traded Marauders and pirate cruisers. These are the highest-value, highest-turnover items in the game.</li>
   <li><b>Commodities</b> (<code>COMMODITY_ITEMS</code>, {{ n_commod }} items): all fifteen minerals, the most-traded compressed ores, and T2 and capital ship components.</li>
+  <li><b>Faction ships</b> (<code>FACTION_SHIPS</code>, {{ n_faction }} hulls): navy and pirate hulls priced over 20M ISK in Jita (list built 2026-11-20 by <code>scripts/find_faction_ships.py</code>). Not part of the hourly collect; load it with <code>python -m eve_market backfill --list faction_ships</code>.</li>
 </ul>
 <p>Items were chosen by average ISK traded per day over 90 days, keeping items that also have enough individual trades per day for prices to be meaningful. The seven specialty minerals are the exception: they're included for completeness but trade only a handful of times a day, so their forecasts are very noisy.</p>
 
@@ -147,7 +148,7 @@ python -m eve_market health --market Amarr      # health score and warnings per 
 python -m eve_market dashboard                  # this site, at http://127.0.0.1:5000
 python -m eve_market backtest --station --market Jita   # station model, once enough snapshots exist</code></pre>
 <p>On Windows, run these through the included <code>eve</code> wrapper (<code>.\eve collect</code>) or after activating the venv. The hourly task runs <code>scheduled_collect.pyw</code>, which takes snapshots every hour and refreshes daily history every 12 hours; its log is <code>data/collect.log</code>. Remove it with <code>Unregister-ScheduledTask -TaskName "EVE Market Collect"</code>.</p>
-<p>Options: <code>--market Jita|Amarr|Dodixie|Hek|Rens|Zarzakh</code> (collect and backfill take several, default all), <code>--list core|commodities|all</code>, <code>--horizon N</code>, <code>--model ensemble|quantile|ridge|gbm|…</code> (<code>backtest --models all --folds 12</code> scores every model), and for the dashboard <code>--port</code>. To keep data current, schedule <code>python -m eve_market collect</code> once a day (ESI history updates shortly after downtime, 11:00 UTC). Refresh this page after collecting; predictions retrain automatically when new data arrives.</p>
+<p>Options: <code>--market Jita|Amarr|Dodixie|Hek|Rens|Zarzakh</code> (collect and backfill take several, default all), <code>--list core|commodities|all|faction_ships</code>, <code>--horizon N</code>, <code>--model ensemble|quantile|ridge|gbm|…</code> (<code>backtest --models all --folds 12</code> scores every model), and for the dashboard <code>--port</code>. To keep data current, schedule <code>python -m eve_market collect</code> once a day (ESI history updates shortly after downtime, 11:00 UTC). Refresh this page after collecting; predictions retrain automatically when new data arrives.</p>
 <p>To track a different item, add its name and <code>type_id</code> to one of the dictionaries in <code>data_sets/tracked_items.py</code> (and a display group in <code>ITEM_GROUPS</code>), then collect again. Type IDs can be looked up in <code>data_sets/invTypes_clean.csv</code>.</p>
 
 <h2>Code layout</h2>

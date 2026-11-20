@@ -291,3 +291,38 @@ def test_every_registered_model_backtests_and_forecasts():
         assert len(p) == 4 and (p["pred_low"] <= p["pred_high"]).all()
     assert set(MODEL_REGISTRY) >= set(available_models())
 
+
+
+def test_faction_ships_list_is_selectable(tmp_path, monkeypatch):
+    from data_sets.tracked_items import EVERY_ITEM, FACTION_SHIPS, ITEM_LISTS
+    import eve_market.backfill
+    from eve_market.__main__ import main
+    assert FACTION_SHIPS and all(isinstance(t, int) for t in FACTION_SHIPS.values())
+    assert len(set(FACTION_SHIPS.values())) == len(FACTION_SHIPS)
+    assert ITEM_LISTS["faction_ships"] is FACTION_SHIPS
+    # Not collected hourly: "all" (the collect default) leaves them out, but the dashboard sees them.
+    assert "Machariel" not in ITEM_LISTS["all"] and EVERY_ITEM["Machariel"] == FACTION_SHIPS["Machariel"]
+    seen = {}
+    monkeypatch.setattr(eve_market.backfill, "backfill", lambda items, *a, **k: seen.setdefault("items", items))
+    main(["--db", str(tmp_path / "f.db"), "backfill", "--list", "faction_ships"])
+    assert seen["items"] == FACTION_SHIPS
+
+
+def test_dashboard_shows_faction_ships(tmp_path):
+    from data_sets.tracked_items import FACTION_SHIPS
+    from eve_market.dashboard import create_app
+    hist = _synthetic_history(n_items=3)
+    hist["volume"] = 10 ** 8
+    conn = storage.connect(tmp_path / "d.db")
+    ids = [(n, FACTION_SHIPS[n]) for n in ("Machariel", "Gila", "Vexor Navy Issue")]
+    storage.save_type_names(conn, dict(ids))
+    for (name, tid), (_, g) in zip(ids, hist.groupby("type_id")):
+        storage.upsert_history(conn, 10000002, tid, g.assign(date=g["date"].dt.strftime("%Y-%m-%d")).to_dict("records"))
+    conn.close()
+    client = create_app(tmp_path / "d.db").test_client()
+    items = {i["name"]: i for i in client.get("/api/items").get_json()}
+    assert items["Machariel"]["lists"] == ["faction_ships"] and items["Gila"]["lists"] == ["core", "faction_ships"]
+    assert client.get(f"/api/history/{FACTION_SHIPS['Machariel']}").status_code == 200
+    assert len(client.get("/api/items?list=faction_ships").get_json()) == 3
+    assert {i["name"] for i in client.get("/api/health").get_json()["items"]} == {"Machariel", "Gila", "Vexor Navy Issue"}
+    assert len(client.get("/api/predictions?list=faction_ships&model=ridge&horizon=7").get_json()["items"]) == 3

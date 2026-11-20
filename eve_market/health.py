@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 from eve_market import storage
-from eve_market.config import DEFAULT_MARKET, ITEM_GROUPS, ITEM_LISTS, MARKETS, load_history
+from eve_market.config import DEFAULT_MARKET, EVERY_ITEM, ITEM_GROUPS, ITEM_LISTS, MARKETS, load_history
 from eve_market.forecast import DEFAULT_MIN_ISK, clean_log_price
 
 WINDOW = 30       # days for liquidity metrics
@@ -140,7 +140,7 @@ def hub_gap(hist: pd.DataFrame, ref: pd.DataFrame) -> pd.Series:
 
 
 def _market_metrics(conn, market: str, ref_hist: pd.DataFrame | None, since: str) -> pd.DataFrame:
-    hist = load_history(conn, "all", market, since)
+    hist = load_history(conn, EVERY_ITEM, market, since)
     df = history_metrics(hist)
     if df.empty:
         return df
@@ -155,20 +155,22 @@ def _market_metrics(conn, market: str, ref_hist: pd.DataFrame | None, since: str
     return df.reset_index()
 
 
-def health_table(conn, market: str = DEFAULT_MARKET, list_name: str = "all",
+def health_table(conn, market: str = DEFAULT_MARKET, list_name: str | dict[str, int] = "all",
                  min_isk: float = DEFAULT_MIN_ISK) -> pd.DataFrame:
-    """Health metrics, score, label and flags for every item of `list_name` at `market`."""
+    """Health metrics, score, label and flags for every item of `list_name` (an ITEM_LISTS name or a
+    {name: type_id} dict) at `market`. Scores rank each item against every tracked item."""
+    items = ITEM_LISTS[list_name] if isinstance(list_name, str) else list_name
     last = conn.execute("SELECT MAX(date) FROM history").fetchone()[0]
     if last is None:
         return pd.DataFrame()
     since = (pd.Timestamp(last) - pd.Timedelta(days=LONG_WINDOW + 40)).strftime("%Y-%m-%d")
-    ref = load_history(conn, "all", DEFAULT_MARKET, since)
+    ref = load_history(conn, EVERY_ITEM, DEFAULT_MARKET, since)
     frames = [f for f in (_market_metrics(conn, m, ref, since) for m in MARKETS) if not f.empty]
     if not frames:
         return pd.DataFrame()
     df = pd.concat(frames, ignore_index=True)
     df = score(df, min_isk)
-    df = df[(df["market"] == market) & df["type_id"].isin(ITEM_LISTS[list_name].values())]
+    df = df[(df["market"] == market) & df["type_id"].isin(items.values())]
     return df.sort_values("score", ascending=False).reset_index(drop=True)
 
 

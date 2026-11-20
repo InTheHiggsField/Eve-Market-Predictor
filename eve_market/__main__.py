@@ -45,7 +45,7 @@ def main(argv: list[str] | None = None) -> None:
         s = sub.add_parser(name)
         s.add_argument("--horizon", type=int, default=7, help="days ahead to forecast")
         s.add_argument("--list", choices=ITEM_LISTS, default="core",
-                       help="core = PLEX/injectors/ships, commodities = minerals/ore/components")
+                       help="core = PLEX/injectors/ships, commodities = minerals/ore/components, faction_ships = navy/pirate hulls over 20M")
         s.add_argument("--market", choices=MARKETS, default=DEFAULT_MARKET, help="trade hub (default: Jita)")
         s.add_argument("--min-isk", type=float, default=DEFAULT_MIN_ISK,
                        help="health floor: leave out items trading less ISK per day than this (0 = keep all)")

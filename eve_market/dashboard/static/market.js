@@ -13,7 +13,7 @@ function seg(id, key, cb) {
 
 function filtered() {
   const q = state.q.toLowerCase();
-  return items.filter(i => (state.list === "all" || i.list === state.list) && (!state.group || i.group === state.group)
+  return items.filter(i => (state.list === "all" || (i.lists || []).includes(state.list)) && (!state.group || i.group === state.group)
     && (!q || i.name.toLowerCase().includes(q)));
 }
 

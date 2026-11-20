@@ -25,7 +25,7 @@ from eve_market.forecast import DEFAULT_MODELS
 log = logging.getLogger(__name__)
 
 # What the Predictions page's buttons can ask for (templates/predictions.html).
-PRED_LISTS = ("core", "commodities", "all")
+PRED_LISTS = ("core", "commodities", "all", "faction_ships")
 PRED_MODELS = DEFAULT_MODELS
 PRED_HORIZONS = (3, 7, 14)
 DEFAULT_REPO = "https://github.com/InTheHiggsField/Eve-Market-Predictor"
