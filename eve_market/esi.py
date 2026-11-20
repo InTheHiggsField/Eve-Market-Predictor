@@ -63,6 +63,14 @@ class ESIClient:
     def system(self, system_id: int) -> dict:
         return self._get(f"/universe/systems/{system_id}").json()
 
+    def type_info(self, type_id: int) -> dict:
+        """Static item data, including volume and packaged_volume (m3)."""
+        return self._get(f"/universe/types/{type_id}").json()
+
+    def route(self, origin_system: int, destination_system: int, flag: str = "shortest") -> list[int]:
+        """System IDs on the autopilot route, origin first. flag: shortest, secure or insecure."""
+        return self._get(f"/route/{origin_system}/{destination_system}", {"flag": flag}).json()
+
     def regions(self) -> list[int]:
         """Known-space region IDs (no wormhole or abyssal regions)."""
         return [r for r in self._get("/universe/regions").json() if r < 11000000]

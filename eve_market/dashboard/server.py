@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 from flask import Flask, abort, jsonify, render_template, request, url_for
 
-from eve_market import storage
+from eve_market import hauling, storage
 from eve_market.config import DEFAULT_MARKET, ITEM_GROUPS, ITEM_LISTS, MARKETS, REGION_OVERRIDES, load_history
 from eve_market.forecast import (DEFAULT_MIN_ISK, DEFAULT_MODEL, FEATURES, MIN_STATION_DAYS,
                                  apply_health_floor, backtest, build_features, build_station_features, fit_model,
@@ -27,7 +27,8 @@ _lock = threading.Lock()  # sklearn fits are CPU heavy; don't run two at once
 
 
 # Page file names in the static (GitHub Pages) export; the Flask app serves them at /, /predictions, ...
-PAGES = {"market": "index.html", "predictions": "predictions.html", "health": "health.html", "about": "about.html"}
+PAGES = {"market": "index.html", "predictions": "predictions.html", "health": "health.html", "hauler": "hauler.html",
+         "about": "about.html"}
 
 
 def _version(filename: str) -> str:
@@ -56,9 +57,11 @@ def region_backdrops() -> tuple[dict, dict]:
     return found, credits
 
 
-def create_app(db_path: str | Path = storage.DEFAULT_DB, static_export: dict | None = None) -> Flask:
+def create_app(db_path: str | Path = storage.DEFAULT_DB, static_export: dict | None = None,
+               offline: bool = False) -> Flask:
     """`static_export` (used by eve_market.site) renders pages for a static host: relative links, and
-    the JavaScript reads prebuilt JSON files instead of calling /api. Its keys go to the templates."""
+    the JavaScript reads prebuilt JSON files instead of calling /api. Its keys go to the templates.
+    `offline` keeps the Hauler from calling ESI for item volumes and routes (it uses the cache only)."""
     app = Flask(__name__, template_folder=str(HERE / "templates"), static_folder=str(HERE / "static"))
 
     @app.context_processor
@@ -112,12 +115,17 @@ def create_app(db_path: str | Path = storage.DEFAULT_DB, static_export: dict | N
     def health_page():
         return render_template("health.html", page="health", markets=MARKETS, min_isk=DEFAULT_MIN_ISK)
 
+    @app.get("/hauler")
+    def hauler_page():
+        return render_template("hauler.html", page="hauler", markets=MARKETS, groups=_item_groups(),
+                               hauling=hauling.page_defaults())
+
     @app.get("/about")
     def about_page():
         return render_template("about.html", page="about", region_overrides=REGION_OVERRIDES, markets=MARKETS,
                                features=FEATURES, n_core=len(ITEM_LISTS["core"]),
                                n_commod=len(ITEM_LISTS["commodities"]), min_station_days=MIN_STATION_DAYS,
-                               min_isk=DEFAULT_MIN_ISK)
+                               min_isk=DEFAULT_MIN_ISK, hauling=hauling.page_defaults())
 
     # ---------- API ----------
     @app.get("/api/items")
@@ -214,7 +222,83 @@ def create_app(db_path: str | Path = storage.DEFAULT_DB, static_export: dict | N
         with _lock:
             return jsonify(_predictions(str(db_path), market, list_name, model, horizon, stamp))
 
+    # ---------- hauling ----------
+    def hauling_inputs(origin: str) -> dict:
+        with conn() as c:  # rebuilt when a new snapshot lands
+            stamp = c.execute("SELECT IFNULL(MAX(taken_at), '') FROM raw_orders").fetchone()[0]
+        return _hauling_inputs(str(db_path), origin, stamp, offline)
+
+    def origin_arg() -> str:
+        o = request.args.get("origin") or request.args.get("market", DEFAULT_MARKET)
+        if o not in MARKETS:
+            abort(400, f"unknown hub {o}")
+        return o
+
+    def hauling_options() -> dict:
+        a = request.args
+        mode, buy_mode = a.get("mode", "instant"), a.get("buy_mode", "instant")
+        if mode not in ("instant", "patient") or buy_mode not in ("instant", "order"):
+            abort(400, "mode is instant|patient, buy_mode is instant|order")
+        try:
+            fees = hauling.fee_rates(int(a.get("accounting", 0)), int(a.get("broker", 0)))
+            cargo = float(a["cargo"]) if a.get("cargo") else None
+            budget = float(a.get("budget", hauling.DEFAULT_BUDGET))
+        except ValueError:
+            abort(400, "accounting, broker, cargo and budget must be numbers")
+        return {"fees": fees, "mode": mode, "buy_mode": buy_mode, "cargo_m3": cargo, "budget": budget}
+
+    @app.get("/api/hauling/inputs")
+    def api_hauling_inputs():
+        """Order books, volumes and routes for every item from one origin; hauler.js does the math."""
+        return jsonify(hauling_inputs(origin_arg()))
+
+    @app.get("/api/hauling")
+    def api_hauling():
+        """Ranked destinations for items (names or type IDs, comma separated) bought at `origin`.
+        qty: units per item (omit for the auto quantity); accounting, broker: skill levels 0-5;
+        mode: instant|patient sale; buy_mode: instant|order; cargo: m3 cap; budget: ISK for auto qty."""
+        inputs, opts = hauling_inputs(origin_arg()), hauling_options()
+        wanted = [w.strip() for w in request.args.get("items", "").split(",") if w.strip()]
+        by_key = {**{i["name"].lower(): i for i in inputs["items"]}, **{str(i["type_id"]): i for i in inputs["items"]}}
+        unknown = [w for w in wanted if w.lower() not in by_key]
+        if not wanted or unknown:
+            abort(400, f"unknown items: {', '.join(unknown)}" if unknown else "pass items=<name or type_id>,...")
+        try:
+            qty = float(request.args["qty"]) if request.args.get("qty") else None
+        except ValueError:
+            abort(400, "qty must be a number")
+        items = [by_key[w.lower()] for w in wanted]
+        out = [{"type_id": i["type_id"], "name": i["name"], "volume_m3": i["volume_m3"],
+                "destinations": hauling.rank_destinations(inputs, i, qty, **opts)} for i in items]
+        return jsonify({"origin": inputs["origin"], "taken_at": inputs["taken_at"], **opts, "qty": qty,
+                        "items": out, "basket": hauling.basket_totals([i["destinations"] for i in out])})
+
+    @app.get("/api/hauling/best")
+    def api_hauling_best():
+        inputs, opts = hauling_inputs(origin_arg()), hauling_options()
+        try:
+            top = min(int(request.args.get("top", 25)), 200)
+            qty = float(request.args["qty"]) if request.args.get("qty") else None
+        except ValueError:
+            abort(400, "top and qty must be numbers")
+        return jsonify({"origin": inputs["origin"], "taken_at": inputs["taken_at"], **opts, "qty": qty,
+                        "runs": hauling.best_runs(inputs, top=top, qty=qty, **opts)})
+
     return app
+
+
+def _item_groups() -> dict[str, list[tuple[str, int]]]:
+    """Every collected item for the Hauler's picker, grouped as on the other pages."""
+    groups: dict[str, list] = {}
+    for name, tid in hauling.hauled_items().items():
+        groups.setdefault(ITEM_GROUPS.get(name, "Other"), []).append((name, tid))
+    return groups
+
+
+@lru_cache(maxsize=12)
+def _hauling_inputs(db_path: str, origin: str, _stamp: str, offline: bool) -> dict:
+    with closing(storage.connect(db_path)) as c:
+        return hauling.build_inputs(c, origin, hauling.hauled_items(), offline=offline)
 
 
 def _num(x):

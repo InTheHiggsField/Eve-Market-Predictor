@@ -43,7 +43,8 @@ def _round(x):
 
 
 def build_site(out: str | Path = "site", db_path=storage.DEFAULT_DB, refresh_hours: float = 6,
-               repo_url: str = DEFAULT_REPO, markets: list[str] | None = None) -> Path:
+               repo_url: str = DEFAULT_REPO, markets: list[str] | None = None, offline: bool = False) -> Path:
+    """`offline` builds the Hauler data from cached item volumes and routes only (no ESI calls)."""
     out = Path(out)
     if out.exists():
         shutil.rmtree(out)
@@ -53,7 +54,7 @@ def build_site(out: str | Path = "site", db_path=storage.DEFAULT_DB, refresh_hou
 
     built_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     app = create_app(db_path, static_export={"built_at": built_at, "refresh_hours": f"{refresh_hours:g}",
-                                             "repo_url": repo_url})
+                                             "repo_url": repo_url}, offline=offline)
     client = app.test_client()
 
     def get(url: str):
@@ -75,6 +76,8 @@ def build_site(out: str | Path = "site", db_path=storage.DEFAULT_DB, refresh_hou
     for market in markets or list(MARKETS):
         save_json(f"items/{market}.json", f"/api/items?market={market}")
         save_json(f"health/{market}.json", f"/api/health?market={market}")
+        # Hauler: the raw inputs; hauler.js does the profit math for any quantity, skills and mode.
+        save_json(f"hauling/inputs/{market}.json", f"/api/hauling/inputs?market={market}")
         type_ids = sorted({i["type_id"] for i in get(f"/api/items?market={market}").get_json()})
         for tid in type_ids:
             save_json(f"history/{tid}/{market}.json", f"/api/history/{tid}?market={market}")

@@ -48,6 +48,29 @@ CREATE TABLE IF NOT EXISTS types (
     type_id INTEGER PRIMARY KEY,
     name TEXT
 );
+-- Hauling lookups from ESI, cached because they rarely change (see hauling.py).
+CREATE TABLE IF NOT EXISTS type_volumes (
+    type_id INTEGER PRIMARY KEY,
+    volume REAL, packaged_volume REAL,
+    fetched_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS station_systems (
+    station_id INTEGER PRIMARY KEY,
+    system_id INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS systems (
+    system_id INTEGER PRIMARY KEY,
+    name TEXT, security_status REAL,
+    fetched_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS routes (
+    origin_system INTEGER NOT NULL,
+    destination_system INTEGER NOT NULL,
+    flag TEXT NOT NULL,
+    systems TEXT NOT NULL,          -- JSON list of system IDs, origin first
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (origin_system, destination_system, flag)
+);
 """
 
 

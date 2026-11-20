@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Hauler · EVE Market Predictor{% endblock %}
+{% block content %}
+<h1>Hauler</h1>
+<p class="sub" id="asof">Buy at the market picked above, haul it, sell at another hub: which destination pays the most after fees?</p>
+
+<div class="controls">
+  <label>Item
+    <span style="display:flex;gap:6px">
+      <select id="item-pick" aria-label="Item">
+        {% for group, items in groups.items() %}<optgroup label="{{ group }}">{% for name, tid in items %}<option value="{{ tid }}">{{ name }}</option>{% endfor %}</optgroup>{% endfor %}
+      </select>
+      <span class="seg"><button id="item-set" title="Show only this item">Show</button><button id="item-add" title="Add this item to the basket">+ Basket</button></span>
+    </span>
+  </label>
+  <label title="Units of each item. Leave empty for auto: what the ISK budget buys at the origin (patient sales: at most about a week of the destination's trade)">Quantity
+    <input type="number" id="qty" min="1" step="1" placeholder="auto"></label>
+  <label title="Caps the quantity of each item to what fits (packaged volume)">Cargo m³
+    <input type="number" id="cargo" min="0" step="any" placeholder="no limit"></label>
+  <label title="Used for the auto quantity">ISK budget
+    <input type="number" id="budget" min="0" step="any" value="{{ '%d'|format(hauling.budget) }}"></label>
+  <label title="Sales tax {{ '%g'|format(hauling.sales_tax * 100) }}%, less {{ '%g'|format(hauling.accounting_step * 100) }}% of it per level">Accounting
+    <select id="accounting" class="narrow">{% for l in range(6) %}<option>{{ l }}</option>{% endfor %}</select></label>
+  <label title="Broker fee {{ '%g'|format(hauling.broker_fee * 100) }}%, less {{ '%g'|format(hauling.broker_step * 100) }} points per level">Broker Relations
+    <select id="broker" class="narrow">{% for l in range(6) %}<option>{{ l }}</option>{% endfor %}</select></label>
+  <label>Sell
+    <span class="seg" id="mode-seg"><button data-v="instant" class="on" title="Sell into the destination's buy orders right away">Instant</button><button data-v="patient" title="List a sell order one tick under the destination's lowest sell order and wait (broker fee applies)">Patient</button></span>
+  </label>
+  <label>Buy
+    <span class="seg" id="buy-seg"><button data-v="instant" class="on" title="Buy the origin's sell orders now">Instant</button><button data-v="order" title="Place a buy order one tick over the best bid (broker fee applies; fill time not estimated)">Buy order</button></span>
+  </label>
+</div>
+
+<div id="basket" class="controls" style="margin-top:-4px"></div>
+<div id="summary" class="note" hidden style="border-left-color: var(--accent)"></div>
+
+<div id="basket-panel" class="panel" hidden style="margin-bottom:16px">
+  <div class="card-head"><h2>Basket: all items to one hub</h2><span class="muted" style="font-size:12px">each item at its own quantity; cargo cap is applied per item</span></div>
+  <div class="table-wrap"><table id="basket-tbl"><thead></thead><tbody></tbody></table></div>
+</div>
+
+<div id="items"></div>
+
+<div class="panel">
+  <div class="card-head"><h2 id="best-title">Best runs</h2><span class="muted" style="font-size:12px" id="best-note"></span></div>
+  <div class="table-wrap"><table id="best-tbl"><thead></thead><tbody><tr><td class="loading">Loading…</td></tr></tbody></table></div>
+  <p class="muted" style="margin:10px 0 0;font-size:12px">Every tracked item at its auto quantity (or your quantity and cargo cap), with your skills and sell mode. Net profit is after sales tax and broker fees. Jumps are the high-sec-only route where one exists ("short" is the shortest route, which may cross low-sec); Low/Null counts those systems on the route. Order books are the latest hourly snapshot, keeping only orders within 20% of the best price, so very large quantities may fill further out than shown. Days to sell divides the quantity by the destination region's median daily volume (you will share it with other sellers). Fees use NPC station rates; player structures set their own and Zarzakh uses the same defaults here. The About page explains the math.</p>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ asset('hauler.js') }}"></script>{% endblock %}
