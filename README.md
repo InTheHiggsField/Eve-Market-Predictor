@@ -22,7 +22,7 @@ python -m eve_market site        # static copy of the dashboard in site/ (for Gi
 The dashboard has three pages: **Market data** (ticker ribbon, sortable table, price/volume charts),
 **Predictions** (forecast graphs with past out-of-sample predictions and backtest scores), and **About**
 (how the data and models work and how to reproduce them).
-Options: `--market Jita Amarr Dodixie Hek Rens Zarzakh` (collect/backfill default to all hubs; backtest/forecast take one, default Jita), `--list core|commodities|all` (collect defaults to all, backtest/forecast to core), `--horizon N` (days ahead), `--model gbm|ridge`,
+Options: `--market Jita Amarr Dodixie Hek Rens Zarzakh` (collect/backfill default to all hubs; backtest/forecast take one, default Jita), `--list core|commodities|all` (collect defaults to all, backtest/forecast to core), `--horizon N` (days ahead), `--model ensemble|quantile|ridge|gbm|...`,
 `--no-snapshots`.
 
 The tracked items live in `data_sets/tracked_items.py` as `{"in-game name": type_id}` dictionaries: `TRACKED_ITEMS` (core: PLEX, injectors, ships) and `COMMODITY_ITEMS` (minerals, compressed ore, ship components). Only those are collected. Trade hubs live in `data_sets/markets.py` (Jita, Amarr, Dodixie, Hek, Rens, and null-sec Zarzakh): price history comes from each hub's region, bid/ask snapshots from its main station. PLEX history comes from its global market (region 19000001). Data is stored in `data/market.db` (SQLite, git-ignored);
@@ -68,7 +68,10 @@ Player-owned citadels (e.g. low-sec trade Keepstars) need a logged-in character:
 - **Target**: log return of the daily average price over the next `horizon` days.
 - **Features**: past returns (1/3/7/14/30d), rolling volatility, distance from 7/30d moving averages,
   daily high-low range, volume z-score, day of week. One model pooled across all items.
-- **Models**: Ridge regression and gradient boosting, compared against "no change" and "momentum".
+- **Models**: Ensemble (default: average of Ridge, quantile boosting, LightGBM-L1 and CatBoost-L1), quantile
+  boosting (median forecast + 10-90% band), Ridge and gradient boosting, compared against "no change" and "momentum".
+  `backtest --models all --folds 12` also scores LightGBM/XGBoost/CatBoost/sklearn boosting on absolute error,
+  random forest, extra trees and Huber. LightGBM, CatBoost and XGBoost are optional: a missing one is skipped.
 - **Backtest**: 5 walk-forward folds of 21 days; training data ends `horizon` days before each fold to avoid leakage.
 
 ### Layout

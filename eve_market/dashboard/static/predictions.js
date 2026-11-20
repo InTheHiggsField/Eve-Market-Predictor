@@ -1,7 +1,8 @@
 //Set of helper function for our predictions page
 chartDefaults();
-const state = { list: "core", model: "ridge", horizon: 7, group: "" };
-const MODEL_LABEL = { no_change: "No change (baseline)", momentum: "Momentum (baseline)", ridge: "Ridge", gbm: "Gradient boosting" };
+const state = { list: "core", model: "ensemble", horizon: 7, group: "" };
+const MODEL_LABEL = { no_change: "No change (baseline)", momentum: "Momentum (baseline)", ridge: "Ridge", gbm: "Gradient boosting",
+  quantile: "Quantile boosting", ensemble: "Ensemble" };
 let data = null, charts = [], rankChart, reqId = 0;
 
 function seg(id, key) {
@@ -21,7 +22,7 @@ function renderSummary() {
   document.querySelector("#summary").innerHTML = `
     <thead><tr><th>Model</th><th class="num">MAE</th><th class="num">vs. no change</th><th class="num">Direction</th></tr></thead>
     <tbody>${rows.map(r => `<tr style="cursor:default" class="${r.model === state.model ? "selected" : ""}">
-      <td>${MODEL_LABEL[r.model]}</td><td class="num">${r.mae.toFixed(4)}</td>
+      <td>${MODEL_LABEL[r.model] || esc(r.model)}</td><td class="num">${r.mae.toFixed(4)}</td>
       <td class="num ${r.mae < base ? "up" : r.mae > base ? "down" : "muted"}">${r.model === "no_change" ? "–" : fmtPct((r.mae / base - 1) * 100)}</td>
       <td class="num">${r.model === "no_change" ? "–" : (r.direction_acc * 100).toFixed(1) + "%"}</td></tr>`).join("")}</tbody>`;
   const sel = rows.find(r => r.model === state.model), v = document.getElementById("verdict");
@@ -142,7 +143,7 @@ function renderAll() {
 async function load() {
   const my = ++reqId;
   document.getElementById("h-label").textContent = state.horizon;
-  document.querySelector("#summary").innerHTML = `<tbody><tr><td class="loading">${window.EVE_STATIC ? "Loading…" : "Training models… (a few seconds)"}</td></tr></tbody>`;
+  document.querySelector("#summary").innerHTML = `<tbody><tr><td class="loading">${window.EVE_STATIC ? "Loading…" : "Training models… (up to a minute the first time)"}</td></tr></tbody>`;
   document.getElementById("cards").style.opacity = .4;
   try {
     const d = await getJSON(apiUrl("predictions", { market: currentMarket(), list: state.list, model: state.model, horizon: state.horizon }));
