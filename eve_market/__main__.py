@@ -2,6 +2,7 @@
     This is the main workflow.
     python -m eve_market collect              # fetch history + order snapshots for the watchlist
     python -m eve_market backtest             # walk-forward evaluation of the models
+    python -m eve_market backtest --models all --folds 12   # every model, incl. LightGBM/XGBoost/CatBoost
     python -m eve_market forecast             # predicted % change over the horizon, per item
     python -m eve_market backfill             # older history (back to 2003) from the EVE Ref archive
     python -m eve_market login                # log in a character (citadel markets)
@@ -21,7 +22,8 @@ import pandas as pd
 from eve_market import storage
 from eve_market.collect import collect, history_is_stale
 from eve_market.config import DEFAULT_MARKET, ITEM_LISTS, MARKETS, REGION_OVERRIDES, load_history
-from eve_market.forecast import DEFAULT_MIN_ISK, apply_health_floor, backtest, build_features, predict_latest
+from eve_market.forecast import (DEFAULT_MIN_ISK, DEFAULT_MODEL, MODEL_REGISTRY, apply_health_floor, backtest,
+                                 build_features, predict_latest, summarize)
 
 # this is our main function which stores all the return data in our database and then our websites use this data.
 def main(argv: list[str] | None = None) -> None:
@@ -48,7 +50,11 @@ def main(argv: list[str] | None = None) -> None:
                        help="health floor: leave out items trading less ISK per day than this (0 = keep all)")
         s.add_argument("--station", action="store_true",
                        help="model the hub station's own price (needs ~45 days of hourly snapshots)")
-    sub.choices["forecast"].add_argument("--model", choices=["gbm", "ridge"], default="gbm")
+    sub.choices["forecast"].add_argument("--model", choices=list(MODEL_REGISTRY), default=DEFAULT_MODEL)
+    bt = sub.choices["backtest"]
+    bt.add_argument("--models", nargs="+", default=None, metavar="MODEL",
+                    help=f"models to score, or 'all' (default: the dashboard set). Choices: {', '.join(MODEL_REGISTRY)}")
+    bt.add_argument("--folds", type=int, default=5, help="walk-forward test windows of 21 days (default: 5)")
     sub.choices["forecast"].add_argument("--out", help="write predictions to this CSV")
 
     b = sub.add_parser("backfill", help="load older daily history from the EVE Ref archive")
@@ -157,10 +163,12 @@ def main(argv: list[str] | None = None) -> None:
                   .sort_values("pred_pct_change", ascending=False).to_string(index=False))
         return
     if args.cmd == "backtest":
-        res = backtest(feats, args.horizon)
-        print(res.to_string(index=False))
-        print("\nMean over folds:")
-        print(res.groupby("model")[["mae", "direction_acc"]].mean().sort_values("mae").to_string())
+        models = "all" if args.models == ["all"] else args.models
+        res = backtest(feats, args.horizon, n_folds=args.folds, models=models)
+        if args.folds <= 5:
+            print(res.to_string(index=False))
+        print("\nMean over folds (skill_pct: % lower error than no_change; fold_wins: share of folds it beat no_change):")
+        print(summarize(res).to_string(float_format=lambda x: f"{x:.4f}"))
     else:
         preds = predict_latest(feats, args.model)
         print(preds.to_string(index=False, float_format=lambda x: f"{x:,.2f}"))

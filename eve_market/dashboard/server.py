@@ -16,8 +16,9 @@ from flask import Flask, abort, jsonify, render_template, request, url_for
 
 from eve_market import storage
 from eve_market.config import DEFAULT_MARKET, ITEM_GROUPS, ITEM_LISTS, MARKETS, REGION_OVERRIDES, load_history
-from eve_market.forecast import (DEFAULT_MIN_ISK, FEATURES, MIN_STATION_DAYS, apply_health_floor, backtest, build_features,
-                        build_station_features, make_models, predict_station, station_days)
+from eve_market.forecast import (DEFAULT_MIN_ISK, DEFAULT_MODEL, FEATURES, MIN_STATION_DAYS,
+                                 apply_health_floor, backtest, build_features, build_station_features, fit_model,
+                                 make_models, predict_station, station_days)
 from eve_market.health import health_table
 
 HERE = Path(__file__).resolve().parent
@@ -27,6 +28,15 @@ _lock = threading.Lock()  # sklearn fits are CPU heavy; don't run two at once
 
 # Page file names in the static (GitHub Pages) export; the Flask app serves them at /, /predictions, ...
 PAGES = {"market": "index.html", "predictions": "predictions.html", "health": "health.html", "about": "about.html"}
+
+
+def _version(filename: str) -> str:
+    """?v=<last modified> on static file links, so browsers (and GitHub Pages' 10-minute cache) fetch
+    the new copy as soon as a file changes instead of showing the old style."""
+    try:
+        return f"?v={int((HERE / 'static' / filename).stat().st_mtime)}"
+    except OSError:
+        return ""
 
 
 def region_backdrops() -> tuple[dict, dict]:
@@ -55,9 +65,9 @@ def create_app(db_path: str | Path = storage.DEFAULT_DB, static_export: dict | N
     def links():
         if static_export is None:
             ctx = {"static_export": None, "page_url": lambda p: "/" if p == "market" else f"/{p}",
-                   "asset": lambda f: url_for("static", filename=f)}
+                   "asset": lambda f: url_for("static", filename=f) + _version(f)}
         else:
-            ctx = {"static_export": static_export, "page_url": lambda p: PAGES[p], "asset": lambda f: f"static/{f}"}
+            ctx = {"static_export": static_export, "page_url": lambda p: PAGES[p], "asset": lambda f: f"static/{f}" + _version(f)}
         images, credits = region_backdrops()
         ctx["backdrops"] = {m: ctx["asset"](f) for m, f in images.items()}
         ctx["backdrop_credits"] = credits
@@ -194,7 +204,7 @@ def create_app(db_path: str | Path = storage.DEFAULT_DB, static_export: dict | N
     def api_predictions():
         market = market_arg()
         list_name = request.args.get("list", "core")
-        model = request.args.get("model", "ridge")
+        model = request.args.get("model", DEFAULT_MODEL)
         horizon = int(request.args.get("horizon", 7))
         if model not in make_models() or not 1 <= horizon <= 30 or list_name not in ITEM_LISTS:
             abort(400)
@@ -236,13 +246,17 @@ def _predictions(db_path: str, market: str, list_name: str, model_name: str, hor
                          "summary": None}}
     if feats.empty or metrics is None or metrics.empty:
         return empty
-    summary = (metrics.groupby("model")[["mae", "direction_acc"]].mean()
-               .reindex(["no_change", "momentum", "ridge", "gbm"]).reset_index())
+    shown = ["no_change", "momentum", *make_models()]
+    summary = metrics.groupby("model")[["mae", "direction_acc"]].mean().reindex(shown).reset_index()
 
-    train = feats.dropna(subset=FEATURES + ["target"])
-    model = make_models()[model_name].fit(train[FEATURES], train["target"])
+    model = fit_model(feats, model_name)
     latest = feats.dropna(subset=FEATURES).sort_values("date").groupby("type_id").tail(1).copy()
-    latest["pred"] = model.predict(latest[FEATURES])
+    latest["pred"] = model.predict(latest)
+    if hasattr(model, "predict_interval"):  # the model's own 10-90% band
+        latest["lo"], latest["hi"] = model.predict_interval(latest)
+    else:  # ~1 sigma of the horizon return
+        band = latest["vol_30"] * np.sqrt(horizon)
+        latest["lo"], latest["hi"] = latest["pred"] - band, latest["pred"] + band
 
     # Station layer: the hub station's own mid price from order-book snapshots.
     station = station.dropna(subset=["mid"])
@@ -255,7 +269,7 @@ def _predictions(db_path: str, market: str, list_name: str, model_name: str, hor
         st_metrics, st_latest = st_result
         st_pred = dict(zip(st_latest["type_id"].astype(int), st_latest["pred"]))
         st_summary = (st_metrics.groupby("model")[["mae", "direction_acc"]].mean()
-                      .reindex(["no_change", "momentum", "ridge", "gbm"]).reset_index()
+                      .reindex(shown).reset_index()
                       .replace({np.nan: None}).to_dict("records"))
     st_now = station.sort_values("taken_at").groupby("type_id").tail(1).set_index("type_id")
     st_daily = (station.assign(day=station["taken_at"].dt.strftime("%Y-%m-%d"))
@@ -267,14 +281,13 @@ def _predictions(db_path: str, market: str, list_name: str, model_name: str, hor
         f = feats[feats["type_id"] == tid].sort_values("date").tail(120)
         o = oos[oos["type_id"] == tid].sort_values("date")
         target_dates = (o["date"] + pd.Timedelta(days=horizon)).dt.strftime("%Y-%m-%d")
-        band = float(r["vol_30"] * np.sqrt(horizon))  # ~1 sigma of the horizon return
         items.append({
             "type_id": tid, "name": r["name"], "group": ITEM_GROUPS.get(r["name"], ""),
             "last_date": r["date"].strftime("%Y-%m-%d"), "price": float(r["average"]),
             "pred_pct": float(np.expm1(r["pred"]) * 100),
             "pred_price": float(r["average"] * np.exp(r["pred"])),
-            "pred_low": float(r["average"] * np.exp(r["pred"] - band)),
-            "pred_high": float(r["average"] * np.exp(r["pred"] + band)),
+            "pred_low": float(r["average"] * np.exp(r["lo"])),
+            "pred_high": float(r["average"] * np.exp(r["hi"])),
             "target_date": (r["date"] + pd.Timedelta(days=horizon)).strftime("%Y-%m-%d"),
             "history": {"dates": f["date"].dt.strftime("%Y-%m-%d").tolist(), "price": f["average"].tolist()},
             # Out-of-sample backtest: what the model predicted for each date, placed at the date it targeted.

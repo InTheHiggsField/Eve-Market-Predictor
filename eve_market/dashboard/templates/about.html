@@ -93,11 +93,14 @@
   <tbody>
     <tr><td><b>No change</b> (baseline)</td><td>Always predicts a 0% move. Any useful model must beat this.</td></tr>
     <tr><td><b>Momentum</b> (baseline)</td><td>Predicts the last <i>h</i> days' move will repeat.</td></tr>
-    <tr><td><b>Ridge regression</b></td><td>A linear model on standardized features with L2 regularization (<code>alpha=10</code>). Simple and hard to overfit; currently the most reliable.</td></tr>
-    <tr><td><b>Gradient boosting</b></td><td>scikit-learn's <code>HistGradientBoostingRegressor</code> (300 trees, learning rate 0.05, 15 leaves, min 50 samples per leaf). Can capture non-linear effects but needs more data to pay off.</td></tr>
+    <tr><td><b>Ensemble</b> (default)</td><td>The average of four models below: Ridge, Quantile boosting, LightGBM and CatBoost (the last two trained on absolute error). Had the lowest error on average over every hub and list in a 12-fold backtest (Nov 2026). If LightGBM or CatBoost isn't installed, it averages the members that are.</td></tr>
+    <tr><td><b>Quantile boosting</b></td><td>Three scikit-learn gradient-boosted models that predict the 10th, 50th and 90th percentile of the move. The median is the forecast; the other two give the price band. Nearly as accurate as the ensemble and needs only scikit-learn.</td></tr>
+    <tr><td><b>Ridge regression</b></td><td>A linear model on standardized features with L2 regularization (<code>alpha=10</code>). Simple and hard to overfit.</td></tr>
+    <tr><td><b>Gradient boosting</b></td><td>scikit-learn's <code>HistGradientBoostingRegressor</code> on squared error (300 trees, learning rate 0.05, 15 leaves, min 50 samples per leaf). The original model; kept for comparison.</td></tr>
   </tbody>
 </table>
-<p>The shaded forecast range on the Predictions page is Â±1 standard deviation of the expected <i>h</i>-day move, estimated as the item's 30-day volatility Ã— âˆš<i>h</i>. It's a rough guide to typical noise, not a guaranteed interval.</p>
+<p>More models can be scored from the command line with <code>backtest --models all</code>: LightGBM, XGBoost and CatBoost on absolute error, sklearn boosting on absolute error, random forest, extra trees and a robust (Huber) linear model. Models trained on absolute error beat the same models on squared error at every hub, because the backtest scores absolute error and price moves have fat tails. Also tried and dropped for not beating Ridge: squared-error LightGBM/XGBoost/CatBoost, exponential smoothing (ETS) per item, and a per-item autoregression (ARIMA-style).</p>
+<p>The shaded forecast range on the Predictions page is the 10&ndash;90% band from the quantile model (for Ensemble, the same band centred on the ensemble's forecast). In the backtest about 75&ndash;80% of outcomes landed inside it, a little under the 80% it aims for. For Ridge and Gradient boosting it is &plusmn;1 standard deviation of the expected <i>h</i>-day move (30-day volatility &times; &radic;<i>h</i>), a rough guide to typical noise.</p>
 
 <h2>How the models are evaluated</h2>
 <p>A <b>walk-forward backtest</b> mimics using the model in real time. The last 105 days are split into five 21-day test windows. For each window the model is trained only on data that ended <i>h</i> days before the window starts (so no training target overlaps the test period), then scored on that window.</p>
@@ -109,8 +112,7 @@
 
 <h2>Limitations</h2>
 <ul>
-  <li>On the core list (PLEX, injectors, ships) the models currently do <b>not</b> beat "no change". These markets are deep and efficient, and the features above don't capture what moves them (patch notes, PLEX sales, events).</li>
-  <li>On liquid commodities, Ridge beats the baseline modestly (about 4% lower error, ~60% direction accuracy).</li>
+  <li>The models beat "no change" at every hub, but by little on Jita's core list (PLEX, injectors, ships): about 2% lower error, ~56% direction accuracy. Deep, efficient markets are hard to predict, and the features don't capture what moves them (patch notes, PLEX sales, events). The edge is bigger at smaller hubs (8&ndash;20% lower error), partly because their noisier prices revert to the mean.</li>
   <li>The daily average mixes buy-order and sell-order fills, so part of any day-to-day "move" is just which side traded more. That flatters direction accuracy.</li>
   <li>Backtests cover only items above the health floor, and their targets use prices with outlier prints clipped, so results are not comparable with runs from before the floor was added.</li>
   <li>The backtest ignores broker fees, sales tax, and how much you could actually trade without moving the price.</li>
@@ -127,12 +129,12 @@ pip install -r requirements.txt
 python -m eve_market collect                    # both lists, ~30 seconds
 python -m eve_market backfill                   # one-off: history back to 2003 (several GB streamed; re-run to resume)
 python -m eve_market backtest --list commodities --market Amarr
-python -m eve_market forecast --list core --model ridge --out data/forecast.csv
+python -m eve_market forecast --list core --model ensemble --out data/forecast.csv
 python -m eve_market health --market Amarr      # health score and warnings per item
 python -m eve_market dashboard                  # this site, at http://127.0.0.1:5000
 python -m eve_market backtest --station --market Jita   # station model, once enough snapshots exist</code></pre>
 <p>On Windows, run these through the included <code>eve</code> wrapper (<code>.\eve collect</code>) or after activating the venv. The hourly task runs <code>scheduled_collect.pyw</code>, which takes snapshots every hour and refreshes daily history every 12 hours; its log is <code>data/collect.log</code>. Remove it with <code>Unregister-ScheduledTask -TaskName "EVE Market Collect"</code>.</p>
-<p>Options: <code>--market Jita|Amarr|Dodixie|Hek|Rens|Zarzakh</code> (collect and backfill take several, default all), <code>--list core|commodities|all</code>, <code>--horizon N</code>, <code>--model ridge|gbm</code>, and for the dashboard <code>--port</code>. To keep data current, schedule <code>python -m eve_market collect</code> once a day (ESI history updates shortly after downtime, 11:00 UTC). Refresh this page after collecting; predictions retrain automatically when new data arrives.</p>
+<p>Options: <code>--market Jita|Amarr|Dodixie|Hek|Rens|Zarzakh</code> (collect and backfill take several, default all), <code>--list core|commodities|all</code>, <code>--horizon N</code>, <code>--model ensemble|quantile|ridge|gbm|…</code> (<code>backtest --models all --folds 12</code> scores every model), and for the dashboard <code>--port</code>. To keep data current, schedule <code>python -m eve_market collect</code> once a day (ESI history updates shortly after downtime, 11:00 UTC). Refresh this page after collecting; predictions retrain automatically when new data arrives.</p>
 <p>To track a different item, add its name and <code>type_id</code> to one of the dictionaries in <code>data_sets/tracked_items.py</code> (and a display group in <code>ITEM_GROUPS</code>), then collect again. Type IDs can be looked up in <code>data_sets/invTypes_clean.csv</code>.</p>
 
 <h2>Code layout</h2>

@@ -2,14 +2,16 @@
 
 Target: log return of the daily average price over the next `horizon` days.
 One pooled model is trained across all items on per-item lag features, and
-evaluated with a walk-forward backtest against naive baselines.
+evaluated with a walk-forward backtest against naive baselines. MODEL_REGISTRY lists every
+model; DEFAULT_MODELS is the set the dashboard runs.
 """
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import HistGradientBoostingRegressor
-from sklearn.linear_model import Ridge
+from sklearn.base import BaseEstimator, RegressorMixin, TransformerMixin
+from sklearn.ensemble import ExtraTreesRegressor, HistGradientBoostingRegressor, RandomForestRegressor
+from sklearn.linear_model import HuberRegressor, Ridge
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -94,12 +96,156 @@ def apply_health_floor(feats: pd.DataFrame, min_isk: float = DEFAULT_MIN_ISK) ->
     return kept, sorted(out["name"].astype(str))
 
 
-def make_models() -> dict:
-    return {
-        "ridge": make_pipeline(StandardScaler(), Ridge(alpha=10.0)),
-        "gbm": HistGradientBoostingRegressor(max_iter=300, learning_rate=0.05, max_leaf_nodes=15,
-                                             min_samples_leaf=50, l2_regularization=1.0, random_state=0),
-    }
+# ---------------------------------------------------------------------------
+# Models. Every model takes the whole feature frame and picks its own columns, so
+# models that need more than FEATURES (ETS, per-item AR) fit the same interface.
+# ---------------------------------------------------------------------------
+class Cols(BaseEstimator, TransformerMixin):
+    """Pipeline step that keeps only the given columns (as float)."""
+
+    def __init__(self, columns):
+        self.columns = columns
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        return X[list(self.columns)].to_numpy(dtype=float)
+
+
+def _on(cols, *steps):
+    return make_pipeline(Cols(cols), *steps)
+
+
+class QuantileBand(BaseEstimator, RegressorMixin):
+    """Three gradient-boosted quantile models. predict() is the median (the point forecast,
+    which suits the MAE score); predict_interval() gives the low/high band."""
+
+    def __init__(self, features=None, low: float = 0.1, high: float = 0.9):
+        self.features, self.low, self.high = features, low, high
+
+    def _q(self, q):
+        return _on(self.features or FEATURES, HistGradientBoostingRegressor(loss="quantile", quantile=q, max_iter=300,
+                                                           learning_rate=0.05, max_leaf_nodes=15,
+                                                           min_samples_leaf=50, random_state=0))
+
+    def fit(self, X, y):
+        self.models_ = {q: self._q(q).fit(X, y) for q in (self.low, 0.5, self.high)}
+        return self
+
+    def predict(self, X):
+        return self.models_[0.5].predict(X)
+
+    def predict_interval(self, X):
+        lo, hi = self.models_[self.low].predict(X), self.models_[self.high].predict(X)
+        return np.minimum(lo, hi), np.maximum(lo, hi)
+
+
+class Ensemble(BaseEstimator, RegressorMixin):
+    """Average of several member models' forecasts. Members whose library isn't installed
+    are left out. The price band comes from the quantile member, centred on the average."""
+
+    def __init__(self, members: tuple[str, ...], features=None):
+        self.members, self.features = members, features
+
+    def fit(self, X, y):
+        self.models_ = make_models(self.members, self.features)
+        for m in self.models_.values():
+            m.fit(X, y)
+        return self
+
+    def predict(self, X):
+        return np.mean([m.predict(X) for m in self.models_.values()], axis=0)
+
+    def predict_interval(self, X):
+        q = self.models_["quantile"]
+        lo, hi = q.predict_interval(X)
+        shift = self.predict(X) - q.predict(X)
+        return lo + shift, hi + shift
+
+
+def _lgbm(f, objective):
+    import lightgbm as lgb
+    return _on(f, lgb.LGBMRegressor(objective=objective, n_estimators=400, learning_rate=0.03,
+                                           num_leaves=15, min_child_samples=100, subsample=0.8, subsample_freq=1,
+                                           colsample_bytree=0.8, reg_lambda=1.0, random_state=0, verbose=-1))
+
+
+def _xgb(f, objective):
+    import xgboost as xgb
+    return _on(f, xgb.XGBRegressor(objective=objective, n_estimators=400, learning_rate=0.03, max_depth=4,
+                                          min_child_weight=50, subsample=0.8, colsample_bytree=0.8,
+                                          reg_lambda=1.0, random_state=0, n_jobs=-1))
+
+
+def _catboost(f, loss):
+    import catboost as cb
+    return _on(f, cb.CatBoostRegressor(loss_function=loss, iterations=500, learning_rate=0.05, depth=5,
+                                              l2_leaf_reg=3.0, random_seed=0, verbose=False, thread_count=-1))
+
+
+# name -> (factory, what it is). Kept: models that beat ridge and gbm on average in the
+# 12-fold backtest over every hub and list (Nov 2026). Tried and dropped for losing to them:
+# squared-error LightGBM / XGBoost / CatBoost, per-series exponential smoothing (ETS) and a
+# per-item autoregression (ARIMA-style). Optional libraries (lightgbm, xgboost, catboost) are imported
+# only when their model is built; if the library isn't installed, the model is skipped.
+MODEL_REGISTRY = {
+    "ridge": (lambda f: _on(f, StandardScaler(), Ridge(alpha=10.0)), "linear, squared error"),
+    "gbm": (lambda f: _on(f, HistGradientBoostingRegressor(
+        max_iter=300, learning_rate=0.05, max_leaf_nodes=15, min_samples_leaf=50, l2_regularization=1.0,
+        random_state=0)), "sklearn gradient boosting, squared error"),
+    "huber": (lambda f: _on(f, StandardScaler(), HuberRegressor(epsilon=1.2, alpha=1e-3, max_iter=500)),
+              "linear, robust (Huber) loss"),
+    "gbm_l1": (lambda f: _on(f, HistGradientBoostingRegressor(
+        loss="absolute_error", max_iter=300, learning_rate=0.05, max_leaf_nodes=15, min_samples_leaf=50,
+        l2_regularization=1.0, random_state=0)), "sklearn gradient boosting, absolute error"),
+    "random_forest": (lambda f: _on(f, RandomForestRegressor(
+        n_estimators=200, min_samples_leaf=100, max_features=0.5, n_jobs=-1, random_state=0)), "random forest"),
+    "extra_trees": (lambda f: _on(f, ExtraTreesRegressor(
+        n_estimators=200, min_samples_leaf=100, max_features=0.7, n_jobs=-1, random_state=0)), "extra trees"),
+    "lightgbm_l1": (lambda f: _lgbm(f, "l1"), "LightGBM, absolute error"),
+    "xgboost_l1": (lambda f: _xgb(f, "reg:absoluteerror"), "XGBoost, absolute error"),
+    "catboost_l1": (lambda f: _catboost(f, "MAE"), "CatBoost, absolute error"),
+    "quantile": (lambda f: QuantileBand(f), "gradient-boosted median with a 10-90% price band"),
+}
+ENSEMBLE_MEMBERS = ("ridge", "quantile", "lightgbm_l1", "catboost_l1")
+MODEL_REGISTRY["ensemble"] = (lambda f: Ensemble(ENSEMBLE_MEMBERS, f), "average of " + ", ".join(ENSEMBLE_MEMBERS))
+
+# Models the dashboard and the default backtest run. `--models all` runs the whole registry.
+# ensemble had the best average skill over every hub and list; quantile is close behind and
+# needs only scikit-learn.
+DEFAULT_MODELS = ("ridge", "gbm", "quantile", "ensemble")
+DEFAULT_MODEL = "ensemble"
+
+
+def available_models(names=None) -> list[str]:
+    """Registry names whose libraries are installed (in registry order)."""
+    out = []
+    for name in (names or MODEL_REGISTRY):
+        try:
+            MODEL_REGISTRY[name][0](FEATURES)
+        except ImportError:
+            continue
+        out.append(name)
+    return out
+
+
+def make_models(names=None, features=None) -> dict:
+    """Fresh, unfitted models on `features` (default FEATURES). Default names: DEFAULT_MODELS.
+    Models whose optional library isn't installed are skipped."""
+    names = DEFAULT_MODELS if names is None else names
+    features = list(features or FEATURES)
+    if names == "all":
+        names = list(MODEL_REGISTRY)
+    out = {}
+    for name in names:
+        if name not in MODEL_REGISTRY:
+            raise KeyError(f"unknown model {name!r}; choose from {', '.join(MODEL_REGISTRY)}")
+        try:
+            out[name] = MODEL_REGISTRY[name][0](features)
+        except ImportError:
+            continue
+    return out
 
 
 def _metrics(y: np.ndarray, pred: np.ndarray) -> dict:
@@ -111,17 +257,25 @@ def _metrics(y: np.ndarray, pred: np.ndarray) -> dict:
 
 
 def backtest(feats: pd.DataFrame, horizon: int = 7, n_folds: int = 5, test_days: int = 21,
-             return_predictions: bool = False, features: list[str] | None = None, min_train: int = 500):
+             return_predictions: bool = False, features: list[str] | None = None, min_train: int = 500,
+             models=None):
     """Walk-forward evaluation. Training rows end `horizon` days before each test window so
-    no training target overlaps the test period.
+    no training target overlaps the test period. `models`: registry names (default
+    DEFAULT_MODELS, "all" for every installed model). no_change and momentum always run.
+
+    Models with a price band (quantile) also report `coverage`: the share of outcomes that
+    landed inside the band (0.8 is right for a 10-90% band).
 
     With `return_predictions=True`, also returns the out-of-sample predictions for every
     test row (one column per model), for plotting predicted vs. actual."""
-    features = features or FEATURES
+    features = list(features or FEATURES)
     data = feats.dropna(subset=features + ["target"])
     dates = np.sort(data["date"].unique())
+    names = list(make_models(models, features))
     results, oos = [], []
     for k in range(n_folds, 0, -1):
+        if k * test_days > len(dates):
+            continue
         test_start = dates[-k * test_days]
         test_end = test_start + np.timedelta64(test_days, "D")
         train = data[data["date"] < test_start - np.timedelta64(horizon, "D")]
@@ -134,11 +288,26 @@ def backtest(feats: pd.DataFrame, horizon: int = 7, n_folds: int = 5, test_days:
             # momentum: assume the last `horizon` days' move continues
             "momentum": test[f"ret_{min(LAGS, key=lambda l: abs(l - horizon))}"].to_numpy(),
         }
-        for name, model in make_models().items():
-            model.fit(train[features], train["target"])
-            preds[name] = model.predict(test[features])
+        extra, intervals = {}, {}
+        fit_names = [n for n in names if n != "ensemble"]
+        if "ensemble" in names:  # its members are fitted once and averaged below
+            fit_names += [m for m in ENSEMBLE_MEMBERS if m not in fit_names]
+        for name, model in make_models(fit_names, features).items():
+            model.fit(train, train["target"])
+            preds[name] = model.predict(test)
+            if hasattr(model, "predict_interval"):
+                lo, hi = intervals[name] = model.predict_interval(test)
+                extra[name] = {"coverage": float(np.mean((y >= lo) & (y <= hi)))}
+        if "ensemble" in names:  # same result as Ensemble.fit/predict, without refitting the members
+            members = [m for m in ENSEMBLE_MEMBERS if m in preds]
+            preds["ensemble"] = np.mean([preds[m] for m in members], axis=0)
+            if "quantile" in extra:
+                lo, hi = intervals["quantile"]
+                shift = preds["ensemble"] - preds["quantile"]
+                extra["ensemble"] = {"coverage": float(np.mean((y >= lo + shift) & (y <= hi + shift)))}
         for name, p in preds.items():
-            results.append({"fold_start": pd.Timestamp(test_start).date(), "model": name, **_metrics(y, p)})
+            results.append({"fold_start": pd.Timestamp(test_start).date(), "model": name, **_metrics(y, p),
+                            **extra.get(name, {})})
         if return_predictions:
             oos.append(test[["date", "type_id", "average", "target"]].assign(**preds))
     results = pd.DataFrame(results)
@@ -147,16 +316,42 @@ def backtest(feats: pd.DataFrame, horizon: int = 7, n_folds: int = 5, test_days:
     return results
 
 
-def predict_latest(feats: pd.DataFrame, model_name: str = "gbm") -> pd.DataFrame:
-    """Fit on all labeled rows, then forecast from each item's most recent day."""
-    train = feats.dropna(subset=FEATURES + ["target"])
-    model = make_models()[model_name]
-    model.fit(train[FEATURES], train["target"])
+def summarize(results: pd.DataFrame) -> pd.DataFrame:
+    """Mean over folds per model, with skill vs. no_change (1 - MAE / no-change MAE, as a %)
+    and the share of folds in which the model beat no_change."""
+    if results.empty:
+        return pd.DataFrame(columns=["mae", "direction_acc", "skill_pct", "fold_wins"])
+    agg = {"mae": "mean", "direction_acc": "mean"}
+    if "coverage" in results:
+        agg["coverage"] = "mean"
+    out = results.groupby("model").agg(agg)
+    base = results[results.model == "no_change"].set_index("fold_start")["mae"]
+    r = results.join(base.rename("base"), on="fold_start")
+    out["skill_pct"] = (1 - out["mae"] / base.mean()) * 100
+    out["fold_wins"] = r.assign(win=r["mae"] < r["base"]).groupby("model")["win"].mean()
+    return out.sort_values("mae")
+
+
+def fit_model(feats: pd.DataFrame, model_name: str = DEFAULT_MODEL, features: list[str] | None = None):
+    """Fit one model on every labeled row."""
+    features = list(features or FEATURES)
+    train = feats.dropna(subset=features + ["target"])
+    return make_models([model_name], features)[model_name].fit(train, train["target"])
+
+
+def predict_latest(feats: pd.DataFrame, model_name: str = DEFAULT_MODEL) -> pd.DataFrame:
+    """Fit on all labeled rows, then forecast from each item's most recent day. Models with
+    a price band also return pred_low / pred_high."""
+    model = fit_model(feats, model_name)
     latest = feats.dropna(subset=FEATURES).sort_values("date").groupby("type_id").tail(1).copy()
-    latest["pred_log_return"] = model.predict(latest[FEATURES])
+    latest["pred_log_return"] = model.predict(latest)
     latest["pred_pct_change"] = np.expm1(latest["pred_log_return"]) * 100
     latest["pred_price"] = latest["average"] * np.exp(latest["pred_log_return"])
     cols = ["type_id", "name", "date", "average", "pred_price", "pred_pct_change", "vol_30"]
+    if hasattr(model, "predict_interval"):
+        lo, hi = model.predict_interval(latest)
+        latest["pred_low"], latest["pred_high"] = latest["average"] * np.exp(lo), latest["average"] * np.exp(hi)
+        cols[5:5] = ["pred_low", "pred_high"]
     return latest[cols].sort_values("pred_pct_change", ascending=False).reset_index(drop=True)
 
 
@@ -216,8 +411,9 @@ def predict_station(station_feats: pd.DataFrame, model_name: str = "ridge", hori
     if labeled["date"].nunique() < MIN_STATION_DAYS - horizon:
         return None
     test_days = 7
-    metrics = backtest(station_feats, horizon, n_folds=3, test_days=test_days, features=STATION_FEATURES, min_train=100)
-    model = make_models()[model_name].fit(labeled[STATION_FEATURES], labeled["target"])
+    metrics = backtest(station_feats, horizon, n_folds=3, test_days=test_days, features=STATION_FEATURES, min_train=100,
+                       models=sorted({*DEFAULT_MODELS, model_name}, key=list(MODEL_REGISTRY).index))
+    model = fit_model(station_feats, model_name, STATION_FEATURES)
     latest = station_feats.dropna(subset=STATION_FEATURES).sort_values("date").groupby("type_id").tail(1).copy()
-    latest["pred"] = model.predict(latest[STATION_FEATURES])
+    latest["pred"] = model.predict(latest)
     return metrics, latest

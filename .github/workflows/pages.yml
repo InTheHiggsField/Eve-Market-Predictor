@@ -8,6 +8,9 @@ on:
   schedule:
     - cron: "23 */6 * * *"   # every 6 hours (UTC); GitHub may start scheduled runs a little late
   workflow_dispatch:          # "Run workflow" button on the Actions tab
+  push:                       # republish as soon as the dashboard code changes
+    branches: [main, claude/market-pipeline]
+    paths: ["eve_market/**", "data_sets/**", ".github/workflows/pages.yml"]
 
 permissions:
   contents: read

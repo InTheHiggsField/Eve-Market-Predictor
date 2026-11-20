@@ -20,12 +20,13 @@ from pathlib import Path
 from eve_market import storage
 from eve_market.config import ITEM_LISTS, MARKETS
 from eve_market.dashboard.server import HERE, PAGES, create_app
+from eve_market.forecast import DEFAULT_MODELS
 
 log = logging.getLogger(__name__)
 
 # What the Predictions page's buttons can ask for (templates/predictions.html).
 PRED_LISTS = ("core", "commodities", "all")
-PRED_MODELS = ("ridge", "gbm")
+PRED_MODELS = DEFAULT_MODELS
 PRED_HORIZONS = (3, 7, 14)
 DEFAULT_REPO = "https://github.com/InTheHiggsField/Eve-Market-Predictor"
 
@@ -78,7 +79,7 @@ def build_site(out: str | Path = "site", db_path=storage.DEFAULT_DB, refresh_hou
         for tid in type_ids:
             save_json(f"history/{tid}/{market}.json", f"/api/history/{tid}?market={market}")
             save_json(f"station/{tid}/{market}.json", f"/api/station/{tid}?market={market}")
-        # Loop order matters: the backtest is cached per (market, list, horizon) and shared by both models.
+        # Loop order matters: the backtest is cached per (market, list, horizon) and shared by every model.
         for lst in PRED_LISTS:
             if lst not in ITEM_LISTS:
                 continue

@@ -40,7 +40,7 @@ def test_features_have_no_lookahead_and_pipeline_runs(tmp_path):
     assert np.isclose(one.loc[40, "ret_7"], np.log(one.loc[40, "average"] / one.loc[33, "average"]))
 
     res = backtest(feats, horizon=7, n_folds=2)
-    assert set(res.model) == {"no_change", "momentum", "ridge", "gbm"}
+    assert {"no_change", "momentum", "ridge", "gbm", "quantile", "ensemble"} <= set(res.model)
     preds = predict_latest(feats, "ridge")
     assert len(preds) == 4 and preds["pred_price"].notna().all()
 
@@ -74,7 +74,7 @@ def test_dashboard_api(tmp_path):
     assert len(items) == 3 and all(i["price"] > 0 for i in items)
     assert client.get(f"/api/history/{ids[0][1]}").status_code == 200
     pred = client.get("/api/predictions?list=core&model=ridge&horizon=7").get_json()
-    assert len(pred["items"]) == 3 and {r["model"] for r in pred["summary"]} == {"no_change", "momentum", "ridge", "gbm"}
+    assert len(pred["items"]) == 3 and {r["model"] for r in pred["summary"]} == {"no_change", "momentum", "ridge", "gbm", "quantile", "ensemble"}
     assert pred["excluded"] == []
     health = client.get("/api/health").get_json()
     assert len(health["items"]) == 3 and all(i["label"] in ("Healthy", "Thin", "Illiquid") for i in health["items"])
@@ -267,7 +267,7 @@ def test_static_site_build(tmp_path):
     for page in ("index.html", "predictions.html", "health.html", "about.html", "static/common.js", ".nojekyll"):
         assert (out / page).exists(), page
     html = (out / "index.html").read_text(encoding="utf-8")
-    assert 'href="static/style.css"' in html and 'href="predictions.html"' in html and "window.EVE_STATIC = true" in html
+    assert 'href="static/style.css?v=' in html and 'href="predictions.html"' in html and "window.EVE_STATIC = true" in html
     assert len(json.loads((out / "data/items/Jita.json").read_text())) == 3
     assert (out / f"data/history/{ids[0][1]}/Jita.json").exists()
     pred = json.loads((out / "data/predictions/Jita/core-ridge-7.json").read_text())
@@ -275,3 +275,19 @@ def test_static_site_build(tmp_path):
     # The local Flask dashboard keeps its own links.
     from eve_market.dashboard import create_app
     assert 'href="/predictions"' in create_app(tmp_path / "d.db").test_client().get("/").get_data(as_text=True)
+
+
+def test_every_registered_model_backtests_and_forecasts():
+    from eve_market.forecast import MODEL_REGISTRY, available_models, summarize
+    feats = build_features(_synthetic_history(n_days=260), horizon=7)
+    res = backtest(feats, horizon=7, n_folds=2, models="all")
+    assert set(available_models()) | {"no_change", "momentum"} == set(res.model)
+    assert {"ridge", "gbm", "gbm_l1", "quantile", "huber", "extra_trees", "random_forest", "ensemble"} <= set(res.model)  # sklearn-only
+    assert res.loc[res.model == "quantile", "coverage"].between(0, 1).all()
+    s = summarize(res)
+    assert np.isclose(s.loc["no_change", "skill_pct"], 0) and len(s) == len(set(res.model))
+    for name in ("quantile", "ensemble"):
+        p = predict_latest(feats, name)
+        assert len(p) == 4 and (p["pred_low"] <= p["pred_high"]).all()
+    assert set(MODEL_REGISTRY) >= set(available_models())
+
