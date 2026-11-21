@@ -14,10 +14,11 @@ import math
 import logging
 import shutil
 import time
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
-from eve_market import storage
+from eve_market import hauling, storage
 from eve_market.config import ITEM_LISTS, MARKETS
 from eve_market.dashboard.server import HERE, PAGES, create_app
 from eve_market.forecast import DEFAULT_MODELS
@@ -25,7 +26,7 @@ from eve_market.forecast import DEFAULT_MODELS
 log = logging.getLogger(__name__)
 
 # What the Predictions page's buttons can ask for (templates/predictions.html).
-PRED_LISTS = ("core", "commodities", "all")
+PRED_LISTS = ("core", "commodities", "all", "faction_ships")
 PRED_MODELS = DEFAULT_MODELS
 PRED_HORIZONS = (3, 7, 14)
 DEFAULT_REPO = "https://github.com/InTheHiggsField/Eve-Market-Predictor"
@@ -43,7 +44,8 @@ def _round(x):
 
 
 def build_site(out: str | Path = "site", db_path=storage.DEFAULT_DB, refresh_hours: float = 6,
-               repo_url: str = DEFAULT_REPO, markets: list[str] | None = None) -> Path:
+               repo_url: str = DEFAULT_REPO, markets: list[str] | None = None, offline: bool = False) -> Path:
+    """`offline` builds the Hauler data from cached item volumes and routes only (no ESI calls)."""
     out = Path(out)
     if out.exists():
         shutil.rmtree(out)
@@ -53,7 +55,7 @@ def build_site(out: str | Path = "site", db_path=storage.DEFAULT_DB, refresh_hou
 
     built_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     app = create_app(db_path, static_export={"built_at": built_at, "refresh_hours": f"{refresh_hours:g}",
-                                             "repo_url": repo_url})
+                                             "repo_url": repo_url}, offline=offline)
     client = app.test_client()
 
     def get(url: str):
@@ -88,6 +90,22 @@ def build_site(out: str | Path = "site", db_path=storage.DEFAULT_DB, refresh_hou
                     save_json(f"predictions/{market}/{lst}-{model}-{h}.json",
                               f"/api/predictions?market={market}&list={lst}&model={model}&horizon={h}")
         log.info("%s: %d items, predictions done (%.0fs so far)", market, len(type_ids), time.monotonic() - started)
+
+    # Hauler: order books and the hub route matrix for every item, once; hauler.js does the profit math
+    # for any quantity, skills, mode and filter. Starting systems: only those whose routes to every hub
+    # are cached (`eve hauling --warm-starts` caches the trade lanes); others need the local dashboard.
+    save_json("hauling/market/all.json", "/api/hauling/market")
+    with closing(storage.connect(db_path)) as c:
+        starts = hauling.cached_start_systems(c)
+        names = {**dict(c.execute("SELECT system_id, name FROM systems")),
+                 **hauling.system_names(c, offline=True)}
+    for sid in starts:
+        save_json(f"hauling/start/{sid}.json", f"/api/hauling/start?system={sid}")
+    (out / "data/hauling/systems").mkdir(parents=True, exist_ok=True)
+    (out / "data/hauling/systems/all.json").write_text(json.dumps(
+        {"complete": False, "systems": sorted(([s, names.get(s, str(s))] for s in starts), key=lambda x: x[1])},
+        separators=(",", ":")))
+    log.info("Hauler: %d starting systems precomputed", len(starts))
 
     size = sum(f.stat().st_size for f in out.rglob("*") if f.is_file()) / 1e6
     log.info("Static site written to %s (%.1f MB)", out, size)

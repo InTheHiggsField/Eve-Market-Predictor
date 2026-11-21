@@ -8,6 +8,7 @@
     python -m eve_market login                # log in a character (citadel markets)
     python -m eve_market hubs --security low  # where the tracked items trade, incl. citadels
     python -m eve_market health               # market health score and warning flags per item
+    python -m eve_market hauling --origin Jita  # best hauling runs from a hub to the others
     python -m eve_market dashboard            # local website at http://127.0.0.1:5000
     python -m eve_market site                 # static copy of the dashboard in site/ (for GitHub Pages)
 """
@@ -44,7 +45,7 @@ def main(argv: list[str] | None = None) -> None:
         s = sub.add_parser(name)
         s.add_argument("--horizon", type=int, default=7, help="days ahead to forecast")
         s.add_argument("--list", choices=ITEM_LISTS, default="core",
-                       help="core = PLEX/injectors/ships, commodities = minerals/ore/components")
+                       help="core = PLEX/injectors/ships, commodities = minerals/ore/components, faction_ships = navy/pirate hulls over 20M")
         s.add_argument("--market", choices=MARKETS, default=DEFAULT_MARKET, help="trade hub (default: Jita)")
         s.add_argument("--min-isk", type=float, default=DEFAULT_MIN_ISK,
                        help="health floor: leave out items trading less ISK per day than this (0 = keep all)")
@@ -75,6 +76,17 @@ def main(argv: list[str] | None = None) -> None:
     hl.add_argument("--list", choices=ITEM_LISTS, default="all")
     hl.add_argument("--market", choices=MARKETS, default=DEFAULT_MARKET)
     hl.add_argument("--min-isk", type=float, default=DEFAULT_MIN_ISK, help="ISK/day below which an item is illiquid")
+
+    ha = sub.add_parser("hauling", help="most profitable item/destination runs from one hub")
+    ha.add_argument("--origin", choices=MARKETS, default=DEFAULT_MARKET)
+    ha.add_argument("--mode", choices=["instant", "patient"], default="patient", help="how you sell at the destination")
+    ha.add_argument("--accounting", type=int, default=0, help="Accounting skill level (0-5)")
+    ha.add_argument("--broker", type=int, default=0, help="Broker Relations skill level (0-5)")
+    ha.add_argument("--cargo", type=float, help="cargo hold in m3 (caps each item's quantity)")
+    ha.add_argument("--top", type=int, default=20)
+    ha.add_argument("--arbitrage", action="store_true", help="best trades over every hub pair instead")
+    ha.add_argument("--warm-starts", action="store_true",
+                    help="cache routes from every trade-lane system to every hub (static site starting systems)")
 
     d = sub.add_parser("dashboard", help="serve the local dashboard")
     d.add_argument("--port", type=int, default=5000)
@@ -121,6 +133,24 @@ def main(argv: list[str] | None = None) -> None:
     if args.cmd == "health":
         from eve_market.health import health_table, print_health
         print_health(health_table(storage.connect(args.db), args.market, args.list, args.min_isk))
+        return
+
+    if args.cmd == "hauling":
+        from eve_market import hauling
+        if args.warm_starts:
+            conn = storage.connect(args.db)
+            hauling.route_matrix(conn)
+            lanes = hauling.lane_systems(conn)
+            print(f"Cached {hauling.warm_start_routes(conn, lanes)} routes from {len(lanes)} trade-lane systems")
+            return
+        if args.arbitrage:
+            market = hauling.build_market(storage.connect(args.db), hauling.hauled_items())
+            hauling.print_best_runs(hauling.arbitrage(market, None, hauling.fee_rates(args.accounting, args.broker),
+                                                      args.mode, cargo_m3=args.cargo, top=args.top))
+            return
+        inputs = hauling.build_inputs(storage.connect(args.db), args.origin, hauling.hauled_items())
+        hauling.print_best_runs(hauling.best_runs(inputs, hauling.fee_rates(args.accounting, args.broker), args.mode,
+                                                  cargo_m3=args.cargo, top=args.top))
         return
 
     if args.cmd == "site":

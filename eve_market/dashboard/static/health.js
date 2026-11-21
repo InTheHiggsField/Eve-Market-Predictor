@@ -16,7 +16,7 @@ const labelColor = l => l === "Healthy" ? css("--up") : l === "Thin" ? css("--wa
 
 function filtered() {
   const q = state.q.toLowerCase();
-  return data.items.filter(i => (state.list === "all" || i.list === state.list) && (!state.label || i.label === state.label)
+  return data.items.filter(i => (state.list === "all" || (i.lists || []).includes(state.list)) && (!state.label || i.label === state.label)
     && (!q || i.name.toLowerCase().includes(q)));
 }
 

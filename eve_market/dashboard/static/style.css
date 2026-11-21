@@ -171,3 +171,16 @@ tbody tr.selected { background: rgba(var(--faction-rgb), .17); box-shadow: inset
 .prose table td, .prose table th { cursor: default; }
 .loading { color: var(--muted); padding: 30px; text-align: center; }
 .site-foot { max-width: 1400px; margin: 0 auto; padding: 18px 24px 30px; font-size: 12px; text-shadow: 0 1px 6px rgba(0,0,0,.8); }
+
+/* hauler */
+input[type=number] { background: rgba(8,13,20,.7); color: var(--text); border: 1px solid var(--glass-line); border-radius: 2px;
+  padding: 6px 8px; font: 14px/1.4 "Segoe UI", system-ui, sans-serif; width: 130px; text-transform: none; letter-spacing: 0; }
+input[type=number]:focus { outline: 1px solid rgba(var(--faction-rgb), .8); outline-offset: 0; }
+select.narrow { min-width: 0; width: 70px; }
+tbody tr.best { background: rgba(var(--up-rgb, 60,207,142), .12); box-shadow: inset 3px 0 0 var(--up); }
+tbody tr.best:hover { background: rgba(60,207,142, .18); }
+select.mid { min-width: 120px; }
+th.sortable.on { color: var(--text); }
+#arb-tbl th, #arb-tbl td { padding: 6px 7px; font-size: 13px; }
+#arb-tbl td.item-name { white-space: nowrap; }
+#arb-tbl th { white-space: normal; vertical-align: bottom; }
