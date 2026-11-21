@@ -230,10 +230,36 @@ def create_app(db_path: str | Path = storage.DEFAULT_DB, static_export: dict | N
             return jsonify(_predictions(str(db_path), market, list_name, model, horizon, stamp))
 
     # ---------- hauling ----------
-    def hauling_inputs(origin: str) -> dict:
+    def hauling_market() -> dict:
         with conn() as c:  # rebuilt when a new snapshot lands
             stamp = c.execute("SELECT IFNULL(MAX(taken_at), '') FROM raw_orders").fetchone()[0]
-        return _hauling_inputs(str(db_path), origin, stamp, offline)
+        return _hauling_market(str(db_path), stamp, offline)
+
+    def hauling_inputs(origin: str) -> dict:
+        return hauling.origin_view(hauling_market(), origin)
+
+    def start_arg(required: bool = False) -> dict | None:
+        """?system=<name or ID> (also ?market=, for the static-site file names): the hauler's starting system."""
+        q = request.args.get("system") or (request.args.get("market") if required else None)
+        if not q:
+            return None
+        with conn() as c:
+            found = hauling.lookup_system(c, q, offline=offline)
+            if found is None:
+                abort(404, f"no solar system called {q}")
+            return hauling.start_legs(c, found["id"], offline=offline)
+
+    def sort_arg(default: str | None) -> str | None:
+        s = request.args.get("sort") or default
+        if s is not None and s not in hauling.SORT_KEYS:
+            abort(400, f"sort is one of {', '.join(hauling.SORT_KEYS)}")
+        return s
+
+    def qty_arg() -> float | None:
+        try:
+            return float(request.args["qty"]) if request.args.get("qty") else None
+        except ValueError:
+            abort(400, "qty must be a number")
 
     def origin_arg() -> str:
         o = request.args.get("origin") or request.args.get("market", DEFAULT_MARKET)
@@ -256,8 +282,61 @@ def create_app(db_path: str | Path = storage.DEFAULT_DB, static_export: dict | N
 
     @app.get("/api/hauling/inputs")
     def api_hauling_inputs():
-        """Order books, volumes and routes for every item from one origin; hauler.js does the math."""
+        """Order books, volumes and routes for every item from one origin."""
         return jsonify(hauling_inputs(origin_arg()))
+
+    @app.get("/api/hauling/market")
+    def api_hauling_market():
+        """Order books, volumes and the hub-to-hub route matrix for every item; hauler.js does the math."""
+        return jsonify(hauling_market())
+
+    @app.get("/api/hauling/systems")
+    def api_hauling_systems():
+        """Every known-space solar system, for the starting-system box: [[id, name], ...]."""
+        with conn() as c:
+            names = hauling.system_names(c, offline=offline)
+        return jsonify({"complete": True, "systems": sorted(([i, n] for i, n in names.items()), key=lambda x: x[1])})
+
+    @app.get("/api/hauling/start")
+    def api_hauling_start():
+        """Jumps from a starting system (?system=<name or ID>) to every hub, and the nearest hub."""
+        return jsonify(start_arg(required=True))
+
+    @app.get("/api/hauling/trips")
+    def api_hauling_trips():
+        """Every buy hub -> sell hub trip for items (names or type IDs), optionally from ?system=.
+        sort: net_profit, roi, profit_per_m3, profit_per_jump or profit_per_total_jump (the default with a system)."""
+        market, opts, start = hauling_market(), hauling_options(), start_arg()
+        wanted = [w.strip() for w in request.args.get("items", "").split(",") if w.strip()]
+        by_key = {**{i["name"].lower(): i for i in market["items"]}, **{str(i["type_id"]): i for i in market["items"]}}
+        unknown = [w for w in wanted if w.lower() not in by_key]
+        if not wanted or unknown:
+            abort(400, f"unknown items: {', '.join(unknown)}" if unknown else "pass items=<name or type_id>,...")
+        sort, qty = sort_arg(None), qty_arg()
+        return jsonify({"taken_at": market["taken_at"], **opts, "qty": qty, "start": start,
+                        "items": [{"type_id": i["type_id"], "name": i["name"],
+                                   "trips": hauling.rank_trips(market, i, qty, start=start, sort=sort, **opts)}
+                                  for i in (by_key[w.lower()] for w in wanted)]})
+
+    @app.get("/api/hauling/arbitrage")
+    def api_hauling_arbitrage():
+        """Best trades over every item and hub pair. Filters: min_profit (ISK), min_roi (%), buy, sell
+        (hub names), system (starting system); sort as for /api/hauling/trips; top (default 100)."""
+        market, opts, start = hauling_market(), hauling_options(), start_arg()
+        a = request.args
+        for hub in (a.get("buy"), a.get("sell")):
+            if hub and hub not in MARKETS:
+                abort(400, f"unknown hub {hub}")
+        try:
+            min_profit = float(a.get("min_profit") or 0)
+            min_roi = float(a["min_roi"]) / 100 if a.get("min_roi") else None
+            top = min(int(a.get("top", 100)), 2000)
+        except ValueError:
+            abort(400, "min_profit, min_roi and top must be numbers")
+        rows = hauling.arbitrage(market, qty_arg(), start=start, min_profit=min_profit, min_roi=min_roi,
+                                 buy_hub=a.get("buy") or None, sell_hub=a.get("sell") or None,
+                                 sort=sort_arg("net_profit"), top=top, **opts)
+        return jsonify({"taken_at": market["taken_at"], **opts, "start": start, "trades": rows})
 
     @app.get("/api/hauling")
     def api_hauling():
@@ -302,10 +381,10 @@ def _item_groups() -> dict[str, list[tuple[str, int]]]:
     return groups
 
 
-@lru_cache(maxsize=12)
-def _hauling_inputs(db_path: str, origin: str, _stamp: str, offline: bool) -> dict:
+@lru_cache(maxsize=4)
+def _hauling_market(db_path: str, _stamp: str, offline: bool) -> dict:
     with closing(storage.connect(db_path)) as c:
-        return hauling.build_inputs(c, origin, hauling.hauled_items(), offline=offline)
+        return hauling.build_market(c, hauling.hauled_items(), offline=offline)
 
 
 def _num(x):

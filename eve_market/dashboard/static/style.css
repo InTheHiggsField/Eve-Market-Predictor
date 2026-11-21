@@ -179,3 +179,8 @@ input[type=number]:focus { outline: 1px solid rgba(var(--faction-rgb), .8); outl
 select.narrow { min-width: 0; width: 70px; }
 tbody tr.best { background: rgba(var(--up-rgb, 60,207,142), .12); box-shadow: inset 3px 0 0 var(--up); }
 tbody tr.best:hover { background: rgba(60,207,142, .18); }
+select.mid { min-width: 120px; }
+th.sortable.on { color: var(--text); }
+#arb-tbl th, #arb-tbl td { padding: 6px 7px; font-size: 13px; }
+#arb-tbl td.item-name { white-space: nowrap; }
+#arb-tbl th { white-space: normal; vertical-align: bottom; }

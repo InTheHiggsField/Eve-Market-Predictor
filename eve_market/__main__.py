@@ -84,6 +84,9 @@ def main(argv: list[str] | None = None) -> None:
     ha.add_argument("--broker", type=int, default=0, help="Broker Relations skill level (0-5)")
     ha.add_argument("--cargo", type=float, help="cargo hold in m3 (caps each item's quantity)")
     ha.add_argument("--top", type=int, default=20)
+    ha.add_argument("--arbitrage", action="store_true", help="best trades over every hub pair instead")
+    ha.add_argument("--warm-starts", action="store_true",
+                    help="cache routes from every trade-lane system to every hub (static site starting systems)")
 
     d = sub.add_parser("dashboard", help="serve the local dashboard")
     d.add_argument("--port", type=int, default=5000)
@@ -134,6 +137,17 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.cmd == "hauling":
         from eve_market import hauling
+        if args.warm_starts:
+            conn = storage.connect(args.db)
+            hauling.route_matrix(conn)
+            lanes = hauling.lane_systems(conn)
+            print(f"Cached {hauling.warm_start_routes(conn, lanes)} routes from {len(lanes)} trade-lane systems")
+            return
+        if args.arbitrage:
+            market = hauling.build_market(storage.connect(args.db), hauling.hauled_items())
+            hauling.print_best_runs(hauling.arbitrage(market, None, hauling.fee_rates(args.accounting, args.broker),
+                                                      args.mode, cargo_m3=args.cargo, top=args.top))
+            return
         inputs = hauling.build_inputs(storage.connect(args.db), args.origin, hauling.hauled_items())
         hauling.print_best_runs(hauling.best_runs(inputs, hauling.fee_rates(args.accounting, args.broker), args.mode,
                                                   cargo_m3=args.cargo, top=args.top))

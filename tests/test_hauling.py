@@ -141,6 +141,9 @@ def test_best_runs_and_basket():
     assert totals[0]["net_profit"] == pytest.approx(10 * 120 * 0.925 - 1000 + 10 * 300 * 0.925 - 1000)
 
 
+START = 30000144
+
+
 class FakeESI:
     def __init__(self):
         self.calls = []
@@ -150,7 +153,22 @@ class FakeESI:
         self.calls.append(("route", o, d, flag))
         if self.fail:
             raise ConnectionError("down")
+        if o == START:  # the test starting system: one jump to Jita, more to the rest
+            hops = {60003: [], 60008: [11, 12]}.get(d, [11])
+            return [o, *hops, d] if flag == "shortest" else [o, *hops, 98, d]
         return [o, 99, d] if flag == "shortest" else [o, 98, 97, d]
+
+    def system_ids(self):
+        self.calls.append(("system_ids",))
+        return [START, 30000142, 31000005]           # the wormhole is left out
+
+    def names(self, ids):
+        self.calls.append(("names", len(ids)))
+        return [{"id": i, "name": {START: "Perimeter", 30000142: "Jita"}[i], "category": "solar_system"} for i in ids]
+
+    def ids(self, names):
+        self.calls.append(("ids", tuple(names)))
+        return {"systems": [{"id": 30002187, "name": "Amarr"}]} if names[0].lower() == "amarr" else {}
 
     def system(self, s):
         self.calls.append(("system", s))
@@ -233,5 +251,120 @@ def test_hauling_api_and_static_export(tmp_path):
     out = build_site(tmp_path / "site", tmp_path / "h.db", markets=["Jita"], offline=True)
     assert (out / "hauler.html").exists() and (out / "static/hauler.js").exists()
     assert 'href="hauler.html"' in (out / "index.html").read_text(encoding="utf-8")
-    inputs = json.loads((out / "data/hauling/inputs/Jita.json").read_text())
-    assert inputs["origin"] == "Jita" and any(i["name"] == "Tritanium" and i["books"]["Amarr"] for i in inputs["items"])
+    market = json.loads((out / "data/hauling/market/all.json").read_text())
+    assert any(i["name"] == "Tritanium" and i["books"]["Amarr"] for i in market["items"])
+    assert json.loads((out / "data/hauling/systems/all.json").read_text())["complete"] is False
+
+
+def _matrix_inputs():
+    """Two items over three hubs with a hand-made route matrix and a starting system."""
+    a = _item({"A": _book(asks=[(100, 10)]), "B": _book(bids=[(200, 10)]), "C": _book(asks=[(90, 10)], bids=[(150, 10)])}, "a", 1)
+    b = _item({"A": _book(asks=[(100, 10)]), "B": _book(asks=[(100, 10)], bids=[(50, 10)]), "C": _book(bids=[(300, 10)])}, "b", 2)
+
+    def leg(j, js=None, low=0):
+        return {"jumps": j, "jumps_secure": js, "low": low, "null": 0, "low_secure": 0 if js else None,
+                "null_secure": 0 if js else None, "risk": None}
+    matrix = {"A": {"B": leg(10, 12), "C": leg(4, None, 2)}, "B": {"A": leg(10, 12), "C": leg(6, 6)},
+              "C": {"A": leg(4), "B": leg(6, 6)}}
+    market = {"taken_at": "t", "hubs": {h: {} for h in "ABC"}, "route_matrix": matrix,
+              "defaults": hauling.page_defaults(), "items": [a, b]}
+    start = {"system": {"id": 1, "name": "Here", "security": 0.9}, "nearest": "C",
+             "legs": {"A": leg(20, 20), "B": leg(30, 30), "C": leg(2, 2)}}
+    return market, start, a, b
+
+
+def test_two_leg_trips_rank_by_profit_per_total_jump():
+    market, start, a, b = _matrix_inputs()
+    rows = hauling.rank_trips(market, a, qty=10, start=start)
+    best = rows[0]
+    # C -> B: buy at 90, sell at 200: 10 * 200 * 0.925 - 900 = 950 net, over 2 empty + 6 loaded jumps
+    assert (best["origin"], best["destination"]) == ("C", "B")
+    assert best["start_jumps"] == 2 and best["loaded_jumps"] == 6 and best["total_jumps"] == 8
+    assert best["net_profit"] == pytest.approx(950) and best["profit_per_total_jump"] == pytest.approx(950 / 8)
+    assert best["profit_per_jump"] == pytest.approx(950 / 6) and best["start"]["risk"] is None and best["risk"] is None
+    # A -> B: 10 * 200 * 0.925 - 1000 = 850, but A is 20 jumps away and the haul is 12 high-sec jumps
+    ab = next(r for r in rows if (r["origin"], r["destination"]) == ("A", "B"))
+    assert ab["total_jumps"] == 32 and ab["profit_per_total_jump"] == pytest.approx(850 / 32)
+    # A -> C has no high-sec route, so the shortest (4 jumps, 2 low-sec) counts
+    ac = next(r for r in rows if (r["origin"], r["destination"]) == ("A", "C"))
+    assert ac["loaded_jumps"] == 4 and ac["low"] == 2
+    by_profit = hauling.rank_trips(market, b, qty=10, start=start, sort="net_profit")
+    assert [(r["origin"], r["destination"]) for r in by_profit[:2]] == [("A", "C"), ("B", "C")]
+    # Without a start, trips rank by total profit and the total jumps are the loaded ones.
+    plain = hauling.rank_trips(market, a, qty=10)
+    assert plain[0]["start_jumps"] is None and plain[0]["total_jumps"] == plain[0]["loaded_jumps"]
+    assert plain[0]["net_profit"] == max(r["net_profit"] or 0 for r in plain)
+    # A buy hub the start has no route to is flagged and gets no total.
+    del start["legs"]["B"]
+    ba = next(r for r in hauling.rank_trips(market, b, qty=10, start=start) if r["origin"] == "B")
+    assert ba["total_jumps"] is None and any("Here to B unknown" in f for f in ba["flags"])
+
+
+def test_arbitrage_filters_and_sorts():
+    market, start, a, b = _matrix_inputs()
+    rows = hauling.arbitrage(market, qty=10)
+    pairs = [(r["name"], r["origin"], r["destination"]) for r in rows]
+    assert pairs[0] == ("b", "A", "C") and all(r["net_profit"] > 0 for r in rows)
+    assert ("b", "A", "B") not in pairs                              # loses money, left out
+    assert {r["destination"] for r in hauling.arbitrage(market, qty=10, sell_hub="B")} == {"B"}
+    assert {r["origin"] for r in hauling.arbitrage(market, qty=10, buy_hub="C")} == {"C"}
+    assert all(r["net_profit"] >= 1500 for r in hauling.arbitrage(market, qty=10, min_profit=1500))
+    assert all(r["roi"] >= 1.0 for r in hauling.arbitrage(market, qty=10, min_roi=1.0))
+    by_roi = hauling.arbitrage(market, qty=10, sort="roi")
+    assert [r["roi"] for r in by_roi] == sorted((r["roi"] for r in by_roi), reverse=True)
+    near = hauling.arbitrage(market, qty=10, start=start, sort="profit_per_total_jump")
+    assert near[0]["origin"] == "C" and near[0]["start_jumps"] == 2
+    assert len(hauling.arbitrage(market, qty=10, top=2)) == 2
+
+
+def test_system_lookup_and_start_legs(tmp_path):
+    conn = storage.connect(tmp_path / "s.db")
+    esi = FakeESI()
+    assert hauling.system_names(conn, esi) == {START: "Perimeter", 30000142: "Jita"}
+    assert hauling.system_names(storage.connect(tmp_path / "s.db"), offline=True) == {START: "Perimeter", 30000142: "Jita"}
+    assert hauling.lookup_system(conn, "perimeter", esi) == {"id": START, "name": "Perimeter"}
+    assert hauling.lookup_system(conn, str(START)) == {"id": START, "name": "Perimeter"}
+    n = len(esi.calls)
+    assert hauling.lookup_system(conn, "AMARR", esi) == {"id": 30002187, "name": "Amarr"}   # not cached: ESI ids
+    assert hauling.lookup_system(conn, "amarr", esi)["id"] == 30002187 and len(esi.calls) == n + 1  # now cached
+    assert hauling.lookup_system(conn, "Nowhere", esi) is None
+    assert hauling.lookup_system(conn, "Nowhere", offline=True) is None
+    st = hauling.start_legs(conn, START, esi)
+    assert st["nearest"] == "Jita" and st["system"]["id"] == START
+    assert st["legs"]["Jita"]["jumps"] == 1 and st["legs"]["Jita"]["jumps_secure"] == 2
+    assert st["legs"]["Amarr"]["jumps"] == 3 and st["legs"]["Amarr"]["risk"] is None
+    assert START in hauling.cached_start_systems(conn)
+    calls = len(esi.calls)
+    hauling.start_legs(conn, START, esi)                              # all cached now
+    assert len(esi.calls) == calls
+
+
+def test_trip_and_arbitrage_api(tmp_path):
+    from eve_market.dashboard import create_app
+    from eve_market.site import build_site
+    _hauling_db(tmp_path / "h.db")
+    conn = storage.connect(tmp_path / "h.db")
+    esi = FakeESI()
+    hauling.route_matrix(conn, esi)
+    hauling.system_names(conn, esi)
+    hauling.start_legs(conn, START, esi)
+    conn.close()
+    client = create_app(tmp_path / "h.db", offline=True).test_client()
+    st = client.get("/api/hauling/start?system=Perimeter").get_json()
+    assert st["nearest"] == "Jita" and st["legs"]["Amarr"]["jumps"] == 3
+    assert client.get("/api/hauling/start?system=Nowhere").status_code == 404
+    assert [s[1] for s in client.get("/api/hauling/systems").get_json()["systems"]] == ["Jita", "Perimeter"]
+    trips = client.get("/api/hauling/trips?items=Tritanium&system=Perimeter&mode=instant").get_json()
+    best = trips["items"][0]["trips"][0]
+    assert (best["origin"], best["destination"]) == ("Jita", "Amarr") and best["start_jumps"] == 2
+    assert best["total_jumps"] == best["start_jumps"] + best["loaded_jumps"]
+    arb = client.get("/api/hauling/arbitrage?mode=patient&min_roi=1&sort=roi").get_json()
+    assert arb["trades"] and all(t["roi"] >= 0.01 for t in arb["trades"])
+    assert client.get("/api/hauling/arbitrage?sort=nonsense").status_code == 400
+    assert client.get("/api/hauling/arbitrage?buy=Nowhere").status_code == 400
+    assert client.get("/api/hauling/market").get_json()["route_matrix"]["Jita"]["Amarr"]["jumps"] == 2
+    # The static export carries the cached starting systems.
+    out = build_site(tmp_path / "site", tmp_path / "h.db", markets=["Jita"], offline=True)
+    systems = json.loads((out / "data/hauling/systems/all.json").read_text())
+    assert [START, "Perimeter"] in systems["systems"] and systems["complete"] is False
+    assert json.loads((out / f"data/hauling/start/{START}.json").read_text())["nearest"] == "Jita"

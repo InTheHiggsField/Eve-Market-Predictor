@@ -9,6 +9,8 @@ browser (static/hauler.js, which needs it for the static GitHub Pages build):
   daily traded volume per hub, and the jumps between hub systems. Volumes, station systems, routes and
   system security come from ESI once and are cached in SQLite.
 * `evaluate` / `rank_destinations` / `best_runs` (pure): profit math on those inputs.
+* `rank_trips` / `arbitrage` (pure): every buy hub / sell hub pair, optionally starting from the
+  hauler's current solar system (an empty first leg to the buy hub, then the loaded leg).
 
 Order books are the individual orders the collector keeps, which are only those priced within 20% of
 the best price on each side (collect.RAW_ORDER_BAND). Depth beyond that band is not counted, so a very
@@ -258,27 +260,113 @@ def _sort_key(r: dict):
     return (r["net_profit"] is None, -(r["net_profit"] or 0))
 
 
-def rank_destinations(inputs: dict, item: dict, qty: float | None = None, fees: dict | None = None,
-                      mode: str = "instant", buy_mode: str = "instant", cargo_m3: float | None = None,
-                      budget: float = DEFAULT_BUDGET) -> list[dict]:
-    """Every other hub for one item, best total net profit first. qty None = auto_qty."""
-    fees = fees or fee_rates()
-    origin = inputs["origin"]
+SORT_KEYS = ("net_profit", "roi", "profit_per_m3", "profit_per_jump", "profit_per_total_jump")
+
+
+def _sort_by(key: str):
+    """Highest first, rows without a value last."""
+    return lambda r: (r.get(key) is None, -(r.get(key) or 0))
+
+
+def trip_qty(item: dict, origin: str, dest: str, qty: float | None, mode: str, cargo_m3: float | None,
+             budget: float) -> float:
+    """Units to carry: `qty`, or the auto quantity (what `budget` buys at the origin, and for listed
+    sales at most about a week of the destination's trade), capped by the cargo hold."""
     q = auto_qty(item, origin, budget) if not qty else qty
     vol = item.get("volume_m3")
     if cargo_m3 and vol:
         q = min(q, math.floor(cargo_m3 / vol))
-    rows = []
-    for d in inputs["hubs"]:
-        if d == origin:
-            continue
-        qd = q
-        dv = (item.get("daily_volume") or {}).get(d)
-        if not qty and mode == "patient" and dv:
-            # Auto quantity for listed orders: no more than about a week of the destination's trade.
-            qd = min(q, max(math.ceil(dv * AUTO_SELL_DAYS), 1))
-        rows.append(evaluate(item, origin, d, qd, fees, mode, buy_mode, (inputs.get("routes") or {}).get(d)))
+    dv = (item.get("daily_volume") or {}).get(dest)
+    if not qty and mode == "patient" and dv:
+        q = min(q, max(math.ceil(dv * AUTO_SELL_DAYS), 1))
+    return q
+
+
+def rank_destinations(inputs: dict, item: dict, qty: float | None = None, fees: dict | None = None,
+                      mode: str = "instant", buy_mode: str = "instant", cargo_m3: float | None = None,
+                      budget: float = DEFAULT_BUDGET) -> list[dict]:
+    """Every other hub for one item, best total net profit first. qty None = auto quantity."""
+    fees = fees or fee_rates()
+    origin = inputs["origin"]
+    rows = [evaluate(item, origin, d, trip_qty(item, origin, d, qty, mode, cargo_m3, budget), fees, mode, buy_mode,
+                     (inputs.get("routes") or {}).get(d))
+            for d in inputs["hubs"] if d != origin]
     return sorted(rows, key=_sort_key)
+
+
+LEG_KEYS = ("jumps", "jumps_secure", "low", "null", "low_secure", "null_secure")
+
+
+def leg_jumps(leg: dict | None) -> int | None:
+    """Jumps counted for a leg: the high-sec-only route where one exists, else the shortest."""
+    if not leg:
+        return None
+    return leg["jumps_secure"] if leg.get("jumps_secure") is not None else leg.get("jumps")
+
+
+def evaluate_trip(market: dict, item: dict, origin: str, dest: str, qty: float | None, fees: dict,
+                  mode: str = "instant", buy_mode: str = "instant", cargo_m3: float | None = None,
+                  budget: float = DEFAULT_BUDGET, start: dict | None = None) -> dict:
+    """One buy hub -> sell hub trip. With `start` (see start_legs), the hauler first flies empty from
+    their current system to the buy hub; that leg costs nothing but adds jumps."""
+    route = (market.get("route_matrix") or {}).get(origin, {}).get(dest)
+    row = evaluate(item, origin, dest, trip_qty(item, origin, dest, qty, mode, cargo_m3, budget), fees, mode,
+                   buy_mode, route)
+    row["origin"] = origin
+    loaded = leg_jumps(route)
+    row["loaded_jumps"] = loaded
+    row["start"] = row["start_jumps"] = None
+    total = loaded
+    if start is not None:
+        leg = (start.get("legs") or {}).get(origin)
+        row["start"] = {**{k: (leg or {}).get(k) for k in LEG_KEYS}, "risk": None}
+        row["start_jumps"] = leg_jumps(leg)
+        total = loaded + row["start_jumps"] if loaded is not None and row["start_jumps"] is not None else None
+        if leg is None:
+            row["flags"].append(f"route from {start['system']['name']} to {origin} unknown")
+    row["total_jumps"] = total
+    net = row["net_profit"]
+    row["profit_per_total_jump"] = net / total if net is not None and total else None
+    return row
+
+
+def rank_trips(market: dict, item: dict, qty: float | None = None, fees: dict | None = None,
+               mode: str = "instant", buy_mode: str = "instant", cargo_m3: float | None = None,
+               budget: float = DEFAULT_BUDGET, start: dict | None = None, sort: str | None = None) -> list[dict]:
+    """Every buy hub -> sell hub pair for one item. Sorted by profit per total jump when a starting
+    system is given, else by total net profit (or by `sort`, one of SORT_KEYS)."""
+    fees = fees or fee_rates()
+    rows = [evaluate_trip(market, item, a, b, qty, fees, mode, buy_mode, cargo_m3, budget, start)
+            for a in market["hubs"] for b in market["hubs"] if a != b]
+    key = sort or ("profit_per_total_jump" if start else "net_profit")
+    return sorted(rows, key=_sort_by(key))
+
+
+def arbitrage(market: dict, qty: float | None = None, fees: dict | None = None, mode: str = "instant",
+              buy_mode: str = "instant", cargo_m3: float | None = None, budget: float = DEFAULT_BUDGET,
+              start: dict | None = None, min_profit: float = 0.0, min_roi: float | None = None,
+              buy_hub: str | None = None, sell_hub: str | None = None, sort: str = "net_profit",
+              top: int | None = 100) -> list[dict]:
+    """Profitable trades over every item and every ordered hub pair, after fees, best first.
+    min_roi is a fraction (0.1 = 10%)."""
+    fees = fees or fee_rates()
+    out = []
+    for item in market["items"]:
+        for a in market["hubs"]:
+            if buy_hub and a != buy_hub:
+                continue
+            for b in market["hubs"]:
+                if a == b or (sell_hub and b != sell_hub):
+                    continue
+                r = evaluate_trip(market, item, a, b, qty, fees, mode, buy_mode, cargo_m3, budget, start)
+                net = r["net_profit"]
+                if net is None or net <= 0 or net < min_profit:
+                    continue
+                if min_roi is not None and (r["roi"] is None or r["roi"] < min_roi):
+                    continue
+                out.append({"type_id": item["type_id"], "name": item["name"], "group": item.get("group", ""), **r})
+    out.sort(key=_sort_by(sort))
+    return out[:top] if top else out
 
 
 def basket_totals(per_item: list[list[dict]]) -> list[dict]:
@@ -440,39 +528,175 @@ def cached_route(conn, origin_system: int, dest_system: int, flag: str, client: 
     return systems
 
 
-def hub_routes(conn, origin: str, client: ESIClient | None = None, offline: bool = False) -> dict[str, dict]:
-    """Jumps and low/null-sec systems from `origin` to every other hub, shortest and high-sec-only.
+def _prefetch_routes(conn, pairs: list[tuple[int, int]], client, offline: bool) -> None:
+    """Fetch missing or old routes (both flags) in parallel, so cached_route then only reads the cache."""
+    if offline:
+        return
+    fresh = {(r[0], r[1], r[2]) for r in conn.execute("SELECT origin_system, destination_system, flag, fetched_at "
+                                                       "FROM routes") if not _older_than(r[3], ROUTE_MAX_AGE_DAYS)}
+    jobs = [(o, d, f) for o, d in sorted(set(pairs)) if o != d for f in ("shortest", "secure")
+            if (o, d, f) not in fresh]
+    if not jobs:
+        return
+    client = client or ESIClient()
 
-    Each route also carries its list of systems with security, so a risk score can be added later
-    (the rows' `risk` field is a placeholder for it and stays None for now)."""
+    def fetch(job):
+        try:
+            return job, client.route(*job)
+        except Exception as exc:
+            log.warning("route %s -> %s (%s) failed: %s", *job, exc)
+            return job, None
+    with ThreadPoolExecutor(8) as pool:
+        got = [(j, r) for j, r in pool.map(fetch, jobs) if r]
+    stamp = _now()
+    conn.executemany("INSERT OR REPLACE INTO routes VALUES (?,?,?,?,?)",
+                     [(o, d, f, json.dumps(r), stamp) for (o, d, f), r in got])
+    conn.commit()
+
+
+def route_legs(conn, pairs: dict, client: ESIClient | None = None, offline: bool = False) -> dict:
+    """{key: (origin_system, destination_system)} -> {key: leg}. A leg has jumps, low and null counts
+    for the shortest and the high-sec-only route, the shortest route's systems with their security,
+    and a `risk` placeholder (None until a risk score exists). Pairs with no known route are left out."""
+    _prefetch_routes(conn, list(pairs.values()), client, offline)
+    # Everything fetchable was just fetched; read the cache (an old route is kept if ESI failed).
+    raw = {(k, f): cached_route(conn, o, d, f, offline=True)
+           for k, (o, d) in pairs.items() for f in ("shortest", "secure")}
+    info = _systems_info(conn, {s for r in raw.values() if r for s in r}, client, offline)
+    out = {}
+    for k in pairs:
+        if not raw[(k, "shortest")] and not raw[(k, "secure")]:
+            continue
+        leg = {"risk": None}
+        for flag, suffix in (("shortest", ""), ("secure", "_secure")):
+            route = raw[(k, flag)]
+            if not route:
+                leg.update({f"jumps{suffix}": None, f"low{suffix}": None, f"null{suffix}": None})
+                continue
+            classes = [security_class(info[s][1]) if s in info else "?" for s in route]
+            leg[f"jumps{suffix}"] = len(route) - 1
+            leg[f"low{suffix}"] = classes.count("low")
+            leg[f"null{suffix}"] = classes.count("null")
+            if flag == "shortest":
+                leg["systems"] = [{"id": s, "name": info.get(s, ("?",))[0],
+                                   "security": info[s][1] if s in info else None} for s in route]
+        out[k] = leg
+    return out
+
+
+def hub_routes(conn, origin: str, client: ESIClient | None = None, offline: bool = False) -> dict[str, dict]:
+    """Jumps and low/null-sec systems from `origin` to every other hub, shortest and high-sec-only."""
     systems = hub_systems(conn, client, offline)
     if origin not in systems:
         return {}
-    o = systems[origin]
-    raw = {}
-    jobs = [(d, flag) for d in systems if d != origin for flag in ("shortest", "secure")]
-    for d, flag in jobs:
-        raw[(d, flag)] = cached_route(conn, o, systems[d], flag, client, offline)
-    info = _systems_info(conn, {s for r in raw.values() if r for s in r}, client, offline)
-    out = {}
-    for d in systems:
-        if d == origin:
-            continue
-        r = {}
-        for flag, suffix in (("shortest", ""), ("secure", "_secure")):
-            route = raw.get((d, flag))
-            if not route:
-                r.update({f"jumps{suffix}": None, f"low{suffix}": None, f"null{suffix}": None})
-                continue
-            classes = [security_class(info[s][1]) if s in info else "?" for s in route]
-            r[f"jumps{suffix}"] = len(route) - 1
-            r[f"low{suffix}"] = classes.count("low")
-            r[f"null{suffix}"] = classes.count("null")
-            if flag == "shortest":
-                r["systems"] = [{"id": s, "name": info.get(s, ("?",))[0],
-                                 "security": info[s][1] if s in info else None} for s in route]
-        out[d] = r
+    return route_legs(conn, {d: (systems[origin], s) for d, s in systems.items() if d != origin}, client, offline)
+
+
+def route_matrix(conn, client: ESIClient | None = None, offline: bool = False) -> dict[str, dict[str, dict]]:
+    """Legs between every ordered pair of hubs: {buy hub: {sell hub: leg}}."""
+    systems = hub_systems(conn, client, offline)
+    legs = route_legs(conn, {(a, b): (systems[a], systems[b]) for a in systems for b in systems if a != b},
+                      client, offline)
+    out: dict[str, dict] = {a: {} for a in systems}
+    for (a, b), leg in legs.items():
+        out[a][b] = leg
     return out
+
+
+def start_legs(conn, system_id: int, client: ESIClient | None = None, offline: bool = False) -> dict:
+    """The empty first leg from the hauler's current system to every hub, and the nearest hub
+    (fewest jumps, counted as in leg_jumps)."""
+    systems = hub_systems(conn, client, offline)
+    legs = route_legs(conn, {h: (system_id, s) for h, s in systems.items()}, client, offline)
+    info = _systems_info(conn, {system_id}, client, offline).get(system_id)
+    if info:
+        name, sec = info
+    else:
+        row = conn.execute("SELECT name FROM system_names WHERE system_id=?", (system_id,)).fetchone()
+        name, sec = (row[0] if row else str(system_id)), None
+    reach = {h: leg_jumps(leg) for h, leg in legs.items() if leg_jumps(leg) is not None}
+    return {"system": {"id": system_id, "name": name, "security": sec}, "legs": legs,
+            "nearest": min(reach, key=lambda h: (reach[h], list(MARKETS).index(h))) if reach else None}
+
+
+# ---------------------------------------------------------------- solar system names
+
+def system_names(conn, client: ESIClient | None = None, offline: bool = False) -> dict[int, str]:
+    """Every known-space solar system (no wormholes), cached: {system_id: name}."""
+    rows = {k: v for k, v in conn.execute("SELECT system_id, name FROM system_names") if k < 31000000}
+    oldest = conn.execute("SELECT MIN(fetched_at), COUNT(*) FROM system_names WHERE system_id < 31000000").fetchone()
+    if offline or (oldest[1] > 1000 and not _older_than(oldest[0], VOLUME_MAX_AGE_DAYS)):
+        return rows
+    try:
+        client = client or ESIClient()
+        ids = [s for s in client.system_ids() if s < 31000000]
+        got = []
+        for i in range(0, len(ids), 1000):
+            got += [(n["id"], n["name"]) for n in client.names(ids[i:i + 1000])]
+    except Exception as exc:
+        log.warning("system list lookup failed: %s", exc)
+        return rows
+    stamp = _now()
+    conn.executemany("INSERT OR REPLACE INTO system_names VALUES (?,?,?)", [(i, n, stamp) for i, n in got])
+    conn.commit()
+    return dict(got)
+
+
+def lookup_system(conn, query, client: ESIClient | None = None, offline: bool = False) -> dict | None:
+    """A solar system by name (any case) or ID: {"id", "name"}, or None if there is no such system.
+    Checks the cached names first, then asks ESI's /universe/ids."""
+    q = str(query).strip()
+    if not q:
+        return None
+    if q.isdigit():
+        row = (conn.execute("SELECT system_id, name FROM system_names WHERE system_id=?", (int(q),)).fetchone()
+               or conn.execute("SELECT system_id, name FROM systems WHERE system_id=?", (int(q),)).fetchone())
+        return {"id": row[0], "name": row[1]} if row else None
+    row = conn.execute("SELECT system_id, name FROM system_names WHERE name = ? COLLATE NOCASE", (q,)).fetchone()
+    if row:
+        return {"id": row[0], "name": row[1]}
+    if offline:
+        return None
+    try:
+        found = (client or ESIClient()).ids([q]).get("systems") or []
+    except Exception as exc:
+        log.warning("system lookup %r failed: %s", q, exc)
+        return None
+    if not found:
+        return None
+    s = found[0]
+    conn.execute("INSERT OR REPLACE INTO system_names VALUES (?,?,?)", (s["id"], s["name"], _now()))
+    conn.commit()
+    return {"id": s["id"], "name": s["name"]}
+
+
+def cached_start_systems(conn) -> list[int]:
+    """Systems whose routes to every hub (both flags) are already cached; a static export includes these."""
+    hubs = set(dict(conn.execute("SELECT station_id, system_id FROM station_systems")).values())
+    if not hubs:
+        return []
+    have: dict[int, set] = {}
+    for o, d, f in conn.execute("SELECT origin_system, destination_system, flag FROM routes"):
+        if d in hubs:
+            have.setdefault(o, set()).add((d, f))
+    return sorted(o for o, got in have.items() if len(got) >= 2 * len(hubs - {o}))
+
+
+def lane_systems(conn) -> list[int]:
+    """Every system on a cached route between two hubs (shortest or high-sec): the trade lanes."""
+    hubs = set(dict(conn.execute("SELECT station_id, system_id FROM station_systems")).values())
+    return sorted({s for o, d, r in conn.execute("SELECT origin_system, destination_system, systems FROM routes")
+                   if o in hubs and d in hubs for s in json.loads(r)})
+
+
+def warm_start_routes(conn, system_ids: list[int], client: ESIClient | None = None) -> int:
+    """Cache the routes from each system to every hub, so the static site can offer them as starts."""
+    systems = hub_systems(conn, client)
+    pairs = [(s, h) for s in system_ids for h in systems.values() if s != h]
+    for i in range(0, len(pairs), 200):
+        _prefetch_routes(conn, pairs[i:i + 200], client, offline=False)
+    route_legs(conn, {i: p for i, p in enumerate(pairs)}, client)   # also caches system security
+    return len(pairs)
 
 
 # ---------------------------------------------------------------- inputs from the database
@@ -522,12 +746,10 @@ def daily_volumes(conn, type_ids: list[int], names: dict[int, str]) -> dict[tupl
     return out
 
 
-def build_inputs(conn, origin: str, items: dict[str, int], client: ESIClient | None = None,
-                 offline: bool = False) -> dict:
-    """Everything the profit math needs for hauling `items` ({name: type_id}) out of `origin`.
+def build_market(conn, items: dict[str, int], client: ESIClient | None = None, offline: bool = False) -> dict:
+    """Everything the profit math needs for `items` ({name: type_id}) at every hub: order books,
+    volumes, daily trade and the legs between every pair of hubs (`route_matrix`).
     `offline` uses only what's cached in the database (no ESI calls)."""
-    if origin not in MARKETS:
-        raise ValueError(f"unknown hub {origin}")
     type_ids = list(items.values())
     names = {t: n for n, t in items.items()}
     books = latest_books(conn, type_ids)
@@ -545,16 +767,31 @@ def build_inputs(conn, origin: str, items: dict[str, int], client: ESIClient | N
             "ref_price": {hub: dv[(hub, tid)][1] for hub in MARKETS if (hub, tid) in dv},
         })
     taken = [b["taken_at"] for b in books.values()]
-    return {"origin": origin, "taken_at": max(taken) if taken else None,
+    return {"taken_at": max(taken) if taken else None,
             "hubs": {h: {"station": m["station"], "security": m["security"]} for h, m in MARKETS.items()},
-            "routes": hub_routes(conn, origin, client, offline),
+            "route_matrix": route_matrix(conn, client, offline),
             "defaults": page_defaults(),
             "items": out_items}
+
+
+def origin_view(market: dict, origin: str) -> dict:
+    """The market seen from one buy hub: adds `origin` and its `routes` (to every other hub)."""
+    if origin not in MARKETS:
+        raise ValueError(f"unknown hub {origin}")
+    return {**market, "origin": origin, "routes": (market.get("route_matrix") or {}).get(origin, {})}
+
+
+def build_inputs(conn, origin: str, items: dict[str, int], client: ESIClient | None = None,
+                 offline: bool = False) -> dict:
+    """build_market seen from `origin` (see origin_view)."""
+    if origin not in MARKETS:
+        raise ValueError(f"unknown hub {origin}")
+    return origin_view(build_market(conn, items, client, offline), origin)
 
 
 def print_best_runs(runs: list[dict]) -> None:
     for r in runs:
         jumps = r.get("jumps_secure") if r.get("jumps_secure") is not None else r.get("jumps")
-        print(f"{r['name'][:30]:30} -> {r['destination']:8} {r['filled']:>10,.0f} units  "
+        print(f"{r['name'][:30]:30} {r.get('origin') or '':8} -> {r['destination']:8} {r['filled']:>10,.0f} units  "
               f"net {r['net_profit'] / 1e6:>9,.1f}M  ROI {r['roi'] * 100:5.1f}%  "
               f"{'?' if jumps is None else jumps:>3} jumps  {', '.join(r['flags'])}")

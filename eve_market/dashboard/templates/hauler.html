@@ -5,6 +5,22 @@
 <p class="sub" id="asof">Buy at the market picked above, haul it, sell at another hub: which destination pays the most after fees?</p>
 
 <div class="controls">
+  <label title="Where you are now. With a system set, every hub can be the buy hub: the trip is an empty flight to the buy hub, then the loaded haul">Starting system
+    <span style="display:flex;gap:6px">
+      <input type="search" id="system" list="systems" placeholder="e.g. Perimeter (optional)" autocomplete="off" style="min-width:220px">
+      <span class="seg"><button id="system-clear" title="Go back to picking a hub">Clear</button></span>
+    </span>
+  </label>
+  <datalist id="systems"></datalist>
+  <span class="muted" style="font-size:13px;align-self:flex-end;padding-bottom:6px" id="start-note"></span>
+  <span class="down" style="font-size:13px;align-self:flex-end;padding-bottom:6px" id="system-error"></span>
+  <label id="trip-sort-wrap" hidden>Rank trips by
+    <span class="seg" id="trip-sort"><button data-v="profit_per_total_jump" class="on" title="Net profit / (jumps to the buy hub + loaded jumps)">Profit per total jump</button><button data-v="net_profit">Total profit</button></span>
+  </label>
+</div>
+<p class="muted" id="system-help" style="font-size:12px;margin:-6px 0 12px"></p>
+
+<div class="controls">
   <label>Item
     <span style="display:flex;gap:6px">
       <select id="item-pick" aria-label="Item">
@@ -40,6 +56,19 @@
 </div>
 
 <div id="items"></div>
+
+<div class="panel" style="margin-bottom:16px">
+  <div class="card-head"><h2>Arbitrage: every hub pair</h2><span class="muted" style="font-size:12px" id="arb-note"></span></div>
+  <div class="controls">
+    <label title="Leave out trades making less than this">Min profit (M ISK)<input type="number" id="arb-min-profit" min="0" step="any" placeholder="0"></label>
+    <label>Min ROI (%)<input type="number" id="arb-min-roi" step="any" placeholder="any"></label>
+    <label>Buy at<select id="arb-buy" class="mid"><option value="">Any hub</option>{% for name in markets %}<option>{{ name }}</option>{% endfor %}</select></label>
+    <label>Sell at<select id="arb-sell" class="mid"><option value="">Any hub</option>{% for name in markets %}<option>{{ name }}</option>{% endfor %}</select></label>
+    <label>Sort by<select id="arb-sort" class="mid"><option value="net_profit">Total profit</option><option value="roi">ROI</option><option value="profit_per_m3">Profit per m³</option><option value="profit_per_jump">Profit per jump</option><option value="profit_per_total_jump">Profit per total jump (needs a starting system)</option></select></label>
+  </div>
+  <div class="table-wrap"><table id="arb-tbl"><thead></thead><tbody><tr><td class="loading">Loading…</td></tr></tbody></table></div>
+  <p class="muted" style="margin:10px 0 0;font-size:12px">Every tracked item bought at one hub and sold at another, using the sell mode, buy mode, skills, quantity and cargo set at the top. Only trades that make money after fees are listed. With a starting system, the jumps to reach the buy hub are added and profit per total jump becomes available. Click a row to look at that item, or a profit column heading to sort.</p>
+</div>
 
 <div class="panel">
   <div class="card-head"><h2 id="best-title">Best runs</h2><span class="muted" style="font-size:12px" id="best-note"></span></div>

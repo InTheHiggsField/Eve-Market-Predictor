@@ -37,6 +37,18 @@ class ESIClient:
             resp.raise_for_status()
         raise RuntimeError(f"ESI request failed after retries: {url}")
 
+    def _post(self, path: str, body) -> requests.Response:
+        url = f"{BASE_URL}{path}"
+        for attempt in range(self.max_retries + 1):
+            resp = self.session.post(url, json=body, timeout=30)
+            if resp.status_code == 200:
+                return resp
+            if resp.status_code in (420, 429, 500, 502, 503, 504) and attempt < self.max_retries:
+                time.sleep(int(resp.headers.get("Retry-After", 2 ** (attempt + 1))))
+                continue
+            resp.raise_for_status()
+        raise RuntimeError(f"ESI request failed after retries: {url}")
+
     def market_prices(self) -> list[dict]:
         """Universe-wide average/adjusted prices for every tradable type."""
         return self._get("/markets/prices").json()
@@ -70,6 +82,18 @@ class ESIClient:
     def route(self, origin_system: int, destination_system: int, flag: str = "shortest") -> list[int]:
         """System IDs on the autopilot route, origin first. flag: shortest, secure or insecure."""
         return self._get(f"/route/{origin_system}/{destination_system}", {"flag": flag}).json()
+
+    def system_ids(self) -> list[int]:
+        """Every solar system ID, wormholes included."""
+        return self._get("/universe/systems").json()
+
+    def names(self, ids: list[int]) -> list[dict]:
+        """Names for up to 1000 IDs: [{"id", "name", "category"}]."""
+        return self._post("/universe/names", ids).json()
+
+    def ids(self, names: list[str]) -> dict:
+        """Exact-name lookup (any case): {"systems": [{"id", "name"}], ...}; categories with no match are left out."""
+        return self._post("/universe/ids", names).json()
 
     def regions(self) -> list[int]:
         """Known-space region IDs (no wormhole or abyssal regions)."""

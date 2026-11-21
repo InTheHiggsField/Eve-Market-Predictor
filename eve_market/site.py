@@ -14,10 +14,11 @@ import math
 import logging
 import shutil
 import time
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
-from eve_market import storage
+from eve_market import hauling, storage
 from eve_market.config import ITEM_LISTS, MARKETS
 from eve_market.dashboard.server import HERE, PAGES, create_app
 from eve_market.forecast import DEFAULT_MODELS
@@ -76,8 +77,6 @@ def build_site(out: str | Path = "site", db_path=storage.DEFAULT_DB, refresh_hou
     for market in markets or list(MARKETS):
         save_json(f"items/{market}.json", f"/api/items?market={market}")
         save_json(f"health/{market}.json", f"/api/health?market={market}")
-        # Hauler: the raw inputs; hauler.js does the profit math for any quantity, skills and mode.
-        save_json(f"hauling/inputs/{market}.json", f"/api/hauling/inputs?market={market}")
         type_ids = sorted({i["type_id"] for i in get(f"/api/items?market={market}").get_json()})
         for tid in type_ids:
             save_json(f"history/{tid}/{market}.json", f"/api/history/{tid}?market={market}")
@@ -91,6 +90,22 @@ def build_site(out: str | Path = "site", db_path=storage.DEFAULT_DB, refresh_hou
                     save_json(f"predictions/{market}/{lst}-{model}-{h}.json",
                               f"/api/predictions?market={market}&list={lst}&model={model}&horizon={h}")
         log.info("%s: %d items, predictions done (%.0fs so far)", market, len(type_ids), time.monotonic() - started)
+
+    # Hauler: order books and the hub route matrix for every item, once; hauler.js does the profit math
+    # for any quantity, skills, mode and filter. Starting systems: only those whose routes to every hub
+    # are cached (`eve hauling --warm-starts` caches the trade lanes); others need the local dashboard.
+    save_json("hauling/market/all.json", "/api/hauling/market")
+    with closing(storage.connect(db_path)) as c:
+        starts = hauling.cached_start_systems(c)
+        names = {**dict(c.execute("SELECT system_id, name FROM systems")),
+                 **hauling.system_names(c, offline=True)}
+    for sid in starts:
+        save_json(f"hauling/start/{sid}.json", f"/api/hauling/start?system={sid}")
+    (out / "data/hauling/systems").mkdir(parents=True, exist_ok=True)
+    (out / "data/hauling/systems/all.json").write_text(json.dumps(
+        {"complete": False, "systems": sorted(([s, names.get(s, str(s))] for s in starts), key=lambda x: x[1])},
+        separators=(",", ":")))
+    log.info("Hauler: %d starting systems precomputed", len(starts))
 
     size = sum(f.stat().st_size for f in out.rglob("*") if f.is_file()) / 1e6
     log.info("Static site written to %s (%.1f MB)", out, size)

@@ -63,6 +63,12 @@ CREATE TABLE IF NOT EXISTS systems (
     name TEXT, security_status REAL,
     fetched_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS system_names (
+    system_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    fetched_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS system_names_name ON system_names (name COLLATE NOCASE);
 CREATE TABLE IF NOT EXISTS routes (
     origin_system INTEGER NOT NULL,
     destination_system INTEGER NOT NULL,
